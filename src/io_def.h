@@ -39,6 +39,7 @@ namespace coxnet {
 #else
     using socket_t = int;
     static constexpr socket_t invalid_socket = -1;
+    static constexpr int SOCKET_ERROR = -1;
 #endif // _WIN32
 
     class Error {
