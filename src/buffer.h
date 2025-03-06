@@ -3,102 +3,119 @@
 
 #include <cstddef>
 #include <cstring>
-#include <string>
 
 namespace coxnet {
     class Buffer {
     public:
-        explicit Buffer(std::size_t initial_size = 8192)
-            : data_(new char[initial_size]), capacity_(initial_size), size_(0) {}
+        // 默认构造函数，可以指定初始容量
+        explicit Buffer(size_t initial_capacity = 8192)
+            : data_(initial_capacity), read_index_(0), write_index_(0) {}
 
-        ~Buffer() {
-            if (data_ != nullptr) {
-                delete[] data_;
-            }
+        // 从已有数据构造
+        Buffer(const char* data, size_t size)
+            : data_(size), read_index_(0), write_index_(size) {
+            std::memcpy(data_.data(), data, size);
         }
 
         Buffer(const Buffer&) = delete;
         Buffer& operator=(const Buffer&) = delete;
 
-        Buffer(Buffer&& other) noexcept
-            : data_(other.data_), capacity_(other.capacity_), size_(other.size_) {
-            other.data_     = nullptr;
-            other.capacity_ = 0;
-            other.size_     = 0;
-        }
-
-        Buffer& operator=(Buffer&& other) noexcept {
-            if (this != &other) {
-                if (data_ != nullptr) {
-                    delete[] data_;
-                }
-
-                data_           = other.data_;
-                capacity_       = other.capacity_;
-                size_           = other.size_;
-                other.data_     = nullptr;
-                other.capacity_ = 0;
-                other.size_     = 0;
-            }
-
-            return *this;
-        }
-
-        char* data() { return data_; }
-        const char* data() const { return data_; }
-
-        std::size_t size() const { return size_; }
-        std::size_t capacity() const { return capacity_; }
-
-        void resize(std::size_t new_size) {
-            if (new_size > capacity_) {
-                reserve(new_size);
-            }
-
-            size_ = new_size;
-        }
-
-        void reserve(std::size_t new_capacity) {
-            if (new_capacity <= capacity_) {
+        Buffer(Buffer&& other) noexcept {
+            if (this == &other) {
                 return;
             }
 
-            char* new_data = new char[new_capacity];
-            if (size_ > 0) {
-                std::memcpy(new_data, data_, size_);
-            }
-
-            delete[] data_;
-            data_       = new_data;
-            capacity_   = new_capacity;
+            data_.swap(other.data_);
+            read_index_     = other.read_index_;
+            write_index_    = other.write_index_;
         }
 
-        void append(const char* data, std::size_t len) {
-            if (size_ + len > capacity_) {
-                reserve((size_ + len) * 2);
+        Buffer& operator=(Buffer&& other) noexcept {
+            if (this == &other) {
+                return *this;
             }
 
-            memcpy(data_ + size_, data, len);
-            size_ += len;
+            data_.swap(other.data_);
+            read_index_     = other.read_index_;
+            write_index_    = other.write_index_;
+            return *this;
         }
 
-        void consume(std::size_t len) {
-            if (len >= size_) {
-                size_ = 0;
-            } else {
-                std::memmove(data_, data_ + len, size_ - len);
-                size_ -= len;
+        // 写入数据
+        void write(const void* data, size_t size) {
+            ensure_writable_bytes(size);
+            std::memcpy(data_.data() + write_index_, data, size);
+            write_index_ += size;
+        }
+
+        // 读取数据
+        int read(void* dest, size_t size) {
+            if (readable_bytes() < size) {
+                return -1;
+            }
+            std::memcpy(dest, data_.data() + read_index_, size);
+            read_index_ += size;
+            return static_cast<int>(size);
+        }
+
+        // 预览数据，不移动读指针
+        int peek(void* dest, size_t size) const {
+            if (readable_bytes() < size) {
+                return -1;
+            }
+            std::memcpy(dest, data_.data() + read_index_, size);
+            return static_cast<int>(size);
+        }
+
+        // 清理已读数据，压缩内存
+        void compact() {
+            if (read_index_ > 0) {
+                size_t remaining = readable_bytes();
+                std::memmove(data_.data(), data_.data() + read_index_, remaining);
+                read_index_ = 0;
+                write_index_ = remaining;
             }
         }
 
-        std::string_view view() const {
-            return std::string_view(data_, size_);
+        // 直接访问底层缓冲区
+        char* data() { return data_.data() + write_index_; }
+        const char* data() const { return data_.data() + write_index_; }
+
+        // 可读字节数
+        size_t readable_bytes() const { return write_index_ - read_index_; }
+
+        // 可写字节数
+        size_t writable_bytes() const { return data_.size() - write_index_; }
+
+        // 预留空间
+        void reserve(size_t new_capacity) {
+            if (new_capacity > data_.size()) {
+                data_.resize(new_capacity);
+            }
+        }
+
+        // 清空缓冲区
+        void clear() {
+            read_index_ = 0;
+            write_index_ = 0;
         }
 
     private:
-        char*       data_;
-        std::size_t capacity_;
-        std::size_t size_;
+        // 确保有足够的可写空间
+        void ensure_writable_bytes(size_t size) {
+            if (writable_bytes() < size) {
+                // 如果总空间不足，扩展缓冲区
+                size_t new_capacity = data_.size() * 2;
+                while (new_capacity < data_.size() + size) {
+                    new_capacity *= 2;
+                }
+                data_.resize(new_capacity);
+            }
+        }
+
+        std::vector<char>   data_;        // 底层存储
+        size_t              read_index_;    // 读取索引
+        size_t              write_index_;   // 写入索引
     };
 }
 

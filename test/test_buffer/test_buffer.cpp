@@ -6,223 +6,122 @@
 #include "catch_amalgamated.hpp"
 #include "coxnet.h"
 
-TEST_CASE("Buffer construction and basic properties", "[buffer]") {
-    SECTION("Default construction") {
-        coxnet::Buffer buf;
-        REQUIRE(buf.size() == 0);
-        REQUIRE(buf.capacity() == 8192);
-        REQUIRE(buf.data() != nullptr);
+TEST_CASE("Buffer basic functions", "[Buffer]") {
+    SECTION("default constructor") {
+        coxnet::Buffer buffer;
+        REQUIRE(buffer.readable_bytes() == 0);
+        REQUIRE(buffer.writable_bytes() > 0);
     }
 
-    SECTION("Custom initial size") {
-        const std::size_t custom_size = 16384;
-        coxnet::Buffer buf(custom_size);
-        REQUIRE(buf.size() == 0);
-        REQUIRE(buf.capacity() == custom_size);
-    }
-}
+    SECTION("write and read integer") {
+        coxnet::Buffer buffer;
+        int writeData = 42;
+        buffer.write(&writeData, sizeof(writeData));
 
-TEST_CASE("Buffer resize operation", "[buffer]") {
-    coxnet::Buffer buf(100);
+        REQUIRE(buffer.readable_bytes() == sizeof(writeData));
 
-    SECTION("Resize within capacity") {
-        buf.resize(50);
-        REQUIRE(buf.size() == 50);
-        REQUIRE(buf.capacity() == 100);
+        int readData = 0;
+        buffer.read(&readData, sizeof(readData));
+
+        REQUIRE(readData == 42);
+        REQUIRE(buffer.readable_bytes() == 0);
     }
 
-    SECTION("Resize beyond capacity") {
-        buf.resize(200);
-        REQUIRE(buf.size() == 200);
-        REQUIRE(buf.capacity() >= 200);
+    SECTION("mult times write and read") {
+        coxnet::Buffer buffer;
+        int data[] = {1, 2, 3, 4, 5};
+        buffer.write(data, sizeof(data));
+
+        REQUIRE(buffer.readable_bytes() == sizeof(data));
+
+        int readData[5] = {0};
+        buffer.read(readData, sizeof(readData));
+
+        for (int i = 0; i < 5; ++i) {
+            REQUIRE(readData[i] == data[i]);
+        }
     }
 
-    SECTION("Resize to zero") {
-        buf.resize(50);  // First set some size
-        buf.resize(0);
-        REQUIRE(buf.size() == 0);
-        REQUIRE(buf.capacity() == 100);  // Capacity should remain unchanged
-    }
-}
+    SECTION("peek data") {
+        coxnet::Buffer buffer;
+        int writeData = 100;
+        buffer.write(&writeData, sizeof(writeData));
 
-TEST_CASE("Buffer reserve operation", "[buffer]") {
-    coxnet::Buffer buf(100);
+        int peekData = 0;
+        buffer.peek(&peekData, sizeof(peekData));
 
-    SECTION("Reserve more capacity") {
-        buf.reserve(200);
-        REQUIRE(buf.capacity() >= 200);
-        REQUIRE(buf.size() == 0);  // Size should remain unchanged
+        REQUIRE(peekData == 100);
+        REQUIRE(buffer.readable_bytes() == sizeof(writeData)); // 确保peek不改变可读字节数
     }
 
-    SECTION("Reserve less capacity") {
-        buf.reserve(50);
-        REQUIRE(buf.capacity() == 100);  // Should keep original capacity
+    SECTION("auto expand store space") {
+        coxnet::Buffer buffer(10); // 初始容量很小
+        std::vector<int> largeData(100, 42);
+
+        buffer.write(largeData.data(), largeData.size() * sizeof(int));
+
+        REQUIRE(buffer.readable_bytes() == largeData.size() * sizeof(int));
+
+        std::vector<int> readData(100, 0);
+        buffer.read(readData.data(), readData.size() * sizeof(int));
+
+        REQUIRE(std::equal(largeData.begin(), largeData.end(), readData.begin()));
     }
 
-    SECTION("Reserve same capacity") {
-        buf.reserve(100);
-        REQUIRE(buf.capacity() == 100);  // Should keep original capacity
-    }
-}
+    SECTION("clear and compact") {
+        coxnet::Buffer buffer;
+        int data1 = 10, data2 = 20;
 
-TEST_CASE("Buffer append operation", "[buffer]") {
-    coxnet::Buffer buf(100);
+        buffer.write(&data1, sizeof(data1));
+        buffer.read(&data1, sizeof(data1)); // 读取后留下一些已读数据
 
-    SECTION("Append within capacity") {
-        const char* test_data = "Hello, world!";
-        std::size_t len = 13;
+        buffer.write(&data2, sizeof(data2));
 
-        buf.append(test_data, len);
-        REQUIRE(buf.size() == len);
-        REQUIRE(std::memcmp(buf.data(), test_data, len) == 0);
+        buffer.compact(); // 压缩内存
+
+        int readData = 0;
+        buffer.read(&readData, sizeof(readData));
+        REQUIRE(readData == 20);
     }
 
-    SECTION("Append beyond capacity") {
-        char test_data[150];
-        std::memset(test_data, 'A', 150);
+    SECTION("reserve store space") {
+        coxnet::Buffer buffer(10);
+        size_t originalCapacity = buffer.writable_bytes();
 
-        buf.append(test_data, 150);
-        REQUIRE(buf.size() == 150);
-        REQUIRE(buf.capacity() >= 150);
-        REQUIRE(std::memcmp(buf.data(), test_data, 150) == 0);
-    }
+        buffer.reserve(originalCapacity * 2);
 
-    SECTION("Multiple appends") {
-        const char* data1 = "Hello, ";
-        const char* data2 = "world!";
-        const char* expected = "Hello, world!";
-
-        buf.append(data1, 7);
-        buf.append(data2, 6);
-
-        REQUIRE(buf.size() == 13);
-        REQUIRE(std::memcmp(buf.data(), expected, 13) == 0);
+        REQUIRE(buffer.writable_bytes() >= originalCapacity * 2);
     }
 }
 
-TEST_CASE("Buffer consume operation", "[buffer]") {
-    coxnet::Buffer buf(100);
-    const char* test_data = "Hello, world!";
-    buf.append(test_data, 13);
+TEST_CASE("buffer marginal test", "[Buffer]") {
+    SECTION("many small data write") {
+        coxnet::Buffer buffer;
+        for (int i = 0; i < 1000; ++i) {
+            int data = i;
+            buffer.write(&data, sizeof(data));
+        }
 
-    SECTION("Consume partial data") {
-        buf.consume(7);  // Consume "Hello, "
+        REQUIRE(buffer.readable_bytes() == 1000 * sizeof(int));
 
-        REQUIRE(buf.size() == 6);
-        REQUIRE(std::memcmp(buf.data(), "world!", 6) == 0);
+        for (int i = 0; i < 1000; ++i) {
+            int readData = 0;
+            buffer.read(&readData, sizeof(readData));
+            REQUIRE(readData == i);
+        }
     }
 
-    SECTION("Consume exact size") {
-        buf.consume(13);
+    SECTION("huge data") {
+        coxnet::Buffer buffer;
+        std::vector<char> largeData(1024 * 1024, 'A'); // 1MB数据
 
-        REQUIRE(buf.size() == 0);
-    }
+        buffer.write(largeData.data(), largeData.size());
 
-    SECTION("Consume more than size") {
-        buf.consume(100);
+        REQUIRE(buffer.readable_bytes() == largeData.size());
 
-        REQUIRE(buf.size() == 0);
-    }
+        std::vector<char> readData(largeData.size(), 0);
+        buffer.read(readData.data(), readData.size());
 
-    SECTION("Consume zero bytes") {
-        buf.consume(0);
-
-        REQUIRE(buf.size() == 13);
-        REQUIRE(std::memcmp(buf.data(), test_data, 13) == 0);
-    }
-}
-
-TEST_CASE("Buffer move semantics", "[buffer]") {
-    SECTION("Move construction") {
-        coxnet::Buffer buf1(100);
-        const char* test_data = "Test data";
-        buf1.append(test_data, 9);
-
-        coxnet::Buffer buf2(std::move(buf1));
-
-        // buf1 should be empty now
-        REQUIRE(buf1.data() == nullptr);
-        REQUIRE(buf1.size() == 0);
-        REQUIRE(buf1.capacity() == 0);
-
-        // buf2 should have the data
-        REQUIRE(buf2.size() == 9);
-        REQUIRE(std::memcmp(buf2.data(), test_data, 9) == 0);
-    }
-
-    SECTION("Move assignment") {
-        coxnet::Buffer buf1(100);
-        coxnet::Buffer buf2(100);
-
-        const char* test_data = "Test data";
-        buf1.append(test_data, 9);
-
-        buf2 = std::move(buf1);
-
-        // buf1 should be empty now
-        REQUIRE(buf1.data() == nullptr);
-        REQUIRE(buf1.size() == 0);
-        REQUIRE(buf1.capacity() == 0);
-
-        // buf2 should have the data
-        REQUIRE(buf2.size() == 9);
-        REQUIRE(std::memcmp(buf2.data(), test_data, 9) == 0);
-    }
-
-    SECTION("Self move assignment") {
-        coxnet::Buffer buf(100);
-        const char* test_data = "Test data";
-        buf.append(test_data, 9);
-
-        buf = std::move(buf);  // This should be a no-op
-
-        REQUIRE(buf.size() == 9);
-        REQUIRE(std::memcmp(buf.data(), test_data, 9) == 0);
-    }
-}
-
-TEST_CASE("Buffer string_view operation", "[buffer]") {
-    coxnet::Buffer buf(100);
-    const char* test_data = "Hello, world!";
-    buf.append(test_data, 13);
-
-    std::string_view view = buf.view();
-
-    REQUIRE(view.size() == 13);
-    REQUIRE(view == "Hello, world!");
-}
-
-TEST_CASE("Buffer edge cases", "[buffer]") {
-    SECTION("Zero-length append") {
-        coxnet::Buffer buf(100);
-        const char* test_data = "Test";
-
-        buf.append(test_data, 0);
-        REQUIRE(buf.size() == 0);
-    }
-
-    SECTION("Append after consume") {
-        coxnet::Buffer buf(100);
-        buf.append("Hello", 5);
-        buf.consume(3);  // Now contains "lo"
-        buf.append(", world!", 8);  // Should contain "lo, world!"
-
-        REQUIRE(buf.size() == 10);
-        REQUIRE(buf.view() == "lo, world!");
-    }
-
-    SECTION("Large buffer handling") {
-        const std::size_t large_size = 1024 * 1024;  // 1MB
-        coxnet::Buffer buf(10);  // Start small
-
-        std::vector<char> large_data(large_size, 'X');
-        buf.append(large_data.data(), large_size);
-
-        REQUIRE(buf.size() == large_size);
-        REQUIRE(buf.capacity() >= large_size);
-
-        // Check first and last bytes
-        REQUIRE(buf.data()[0] == 'X');
-        REQUIRE(buf.data()[large_size - 1] == 'X');
+        REQUIRE(readData == largeData);
     }
 }
