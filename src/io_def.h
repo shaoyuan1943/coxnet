@@ -26,6 +26,7 @@
 #endif
 
 #include <string>
+#include <regex>
 
 namespace coxnet {
     enum class SocketErr {
@@ -83,6 +84,31 @@ namespace coxnet {
     // every io operation size
     static constexpr size_t max_size_per_write  = (size_t)(1024 * 2);
     static constexpr size_t max_size_per_read   = (size_t)(1024 * 2);
+
+    enum class IPType { kInvalid, kIPv4, kIPv6 };
+
+    inline IPType ip_address_version(const std::string& address) {
+        if (address.empty()) {
+            return IPType::kInvalid;
+        }
+
+        static std::regex v4_regex(R"((\d{1,3}\.){3}\d{1,3})");
+        static std::regex v6_regex(R"((([0-9a-fA-F]{0,4}:){1,7}[0-9a-fA-F]{0,4}))");
+
+        if (std::regex_match(address, v6_regex)) {
+            return IPType::kIPv6;
+        } else if (std::regex_match(address, v4_regex)) {
+            return IPType::kIPv4;
+        }
+
+        return IPType::kInvalid;
+    }
+
+    enum class SocketStackMode {
+        kOnlyIPv4,
+        kOnlyIPv6,
+        kIPv4IPv6,
+    };
 } // namespace coxcp
 
 #endif //IO_DEF_H

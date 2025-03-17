@@ -35,7 +35,9 @@ namespace coxnet {
 
     class Poller {
     public:
-        Poller() = default;
+        Poller(SocketStackMode mode) {
+            stack_mode_ = mode;
+        }
 
         ~Poller() {
             delete sock_listener_;
@@ -47,17 +49,27 @@ namespace coxnet {
         Poller& operator=(Poller&& other) = delete;
 
         bool listen(const char address[], uint32_t port, ConnectionCallback on_connection, DataCallback on_data, CloseCallback on_close) {
-            SOCKET sock = ::socket(AF_INET, SOCK_STREAM, IPPROTO_IP);
+            IPType address_type = ip_address_version(std::string(address));
+            if (address_type == IPType::kInvalid) {
+                return false;
+            }
+
+            if (mode == SocketStackMode::kOnlyIPv4 && net_type != IPType::kIPv4) {
+                return false;
+            }
+
+            if (mode == SocketStackMode::kOnlyIPv6 && net_type != IPType::kIPv6) {
+                return false;
+            }
+
+            stack_mode_ = mode;
+            SOCKET sock = ::socket(net_type == IPType::kIPv4 ? AF_INET : AF_INET6, SOCK_STREAM, IPPROTO_IP);
             if (sock == invalid_socket) {
                 return false;
             }
 
-            if (address == nullptr || address[0] == '\0') {
-                return false;
-            }
-
-            in_addr ipv4_addr {};
-            if (inet_pton(AF_INET, address, &ipv4_addr) == 0) {
+            in_addr ip_addr {};
+            if (inet_pton(net_type == IPType::kIPv4 ? AF_INET : AF_INET6, address, &ip_addr) == 0) {
                 return false;
             }
 
@@ -68,8 +80,8 @@ namespace coxnet {
             }
 
             sockaddr_in local_addr = {};
-            local_addr.sin_family       = AF_INET;
-            local_addr.sin_addr.s_addr  = ipv4_addr.S_un.S_addr;
+            local_addr.sin_family       = net_type == IPType::kIPv4 ? AF_INET : AF_INET6;
+            local_addr.sin_addr.s_addr  = ip_addr.S_un.S_addr;
             local_addr.sin_port         = htons(port);
 
             result = ::bind(sock, reinterpret_cast<sockaddr*>(&local_addr), sizeof(local_addr));
@@ -253,6 +265,8 @@ namespace coxnet {
         ConnectionCallback                      on_connection_  = nullptr;
         DataCallback                            on_data_        = nullptr;
         CloseCallback                           on_close_       = nullptr;
+
+        SocketStackMode stack_mode_ = SocketStackMode::kOnlyIPv4;
     };
 }
 #endif //POLLER_H
