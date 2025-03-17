@@ -3,21 +3,28 @@
 
 #include <tuple>
 #include <functional>
+#include <utility>
+#include <algorithm>
 
 #include "io_def.h"
 
 namespace coxnet {
-
+    class Poller;
+    class simple_buffer;
     class Socket;
     using ConnectionCallback    = std::function<void (Socket* conn_socket)>;
-    using ErrorCallback         = std::function<void (Socket* conn_socket, int err_code)>;
+    using CloseCallback         = std::function<void (Socket* conn_socket, int err)>;
+    using DataCallback          = std::function<void (Socket* conn_socket, const char* data, size_t size)>;
 
     class Socket {
     public:
-        Socket()
-            : sock_(invalid_socket) {}
-
-        explicit Socket(socket_t sock) : sock_(sock) {}
+        friend class Poller;
+        explicit Socket(socket_t sock) {
+            sock_ = sock;
+            if (!is_listener()) {
+                buff_ = new simple_buffer(max_read_buff_size);
+            }
+        }
 
         virtual ~Socket() {
             this->close_handle();
@@ -25,100 +32,202 @@ namespace coxnet {
 
         Socket(const Socket&) = delete;
         Socket& operator=(const Socket&) = delete;
+        Socket(Socket&& other) = delete;
+        Socket& operator=(Socket&& other) = delete;
 
-        Socket(Socket&& other) noexcept {
-            sock_           = other.sock_;
-            other.sock_     = invalid_socket;
+        socket_t native_handle() const {
+            return sock_;
         }
 
-        Socket& operator=(Socket&& other) noexcept {
-            if (this != &other) {
-                close_handle();
-                sock_           = other.sock_;
-                other.sock_     = invalid_socket;
-            }
-            return *this;
+        bool is_valid() const {
+            return sock_ != invalid_socket;
         }
 
-        socket_t native_handle() const { return sock_; }
-        bool is_valid() const { return (sock_ == invalid_socket) || delay_close_; }
-
-        bool is_closed() const { return delay_close_ ? true : (sock_ == invalid_socket ? true : false); }
-        void close_handle(const bool is_delay = false) {
-            if (is_delay) {
-                delay_close_ = true;
-            } else {
-                if (sock_ == invalid_socket) {
-                    return;
-                }
-#ifdef _WIN32
-                closesocket(sock_);
-#endif
-
-#ifdef __linux__ || __APPLE__
-                close(socket_);
-#endif
-
-                sock_ = invalid_socket;
-            }
+        void user_close() {
+            user_closed_ = true;
+            close_handle();
         }
 
-        bool set_non_blocking() const {
-#ifdef _WIN32
-            u_long option = 0;
-            int result = ioctlsocket(sock_, FIONBIO, &option);
-            return result == 0;
-#endif
-
-#ifdef __linux__ || __APPLE__
-            int option = fcntl(sock_, F_GETFL, 0);
-            int result = fcntl(sock_, F_SETFL, &option | O_NONBLOCK);
-            return result == 0;
-#endif
+        void* user_data() const {
+            return user_data_;
         }
 
-        virtual bool is_listener() { return false; }
-
-        void* user_data() { return user_data_; }
         void set_user_data(void* usr_data) {
             user_data_ = usr_data;
         }
 
-        void set_remote_addr(const char* addr, int port) {
-            memcpy(remote_addr, addr, 64);
-            remote_port = port;
+        std::tuple<char*, int> remote_addr() {
+            return std::make_tuple(remote_addr_, remote_port_);
         }
 
-        std::tuple<char*, int> remote_addr() {
-            return std::make_tuple(remote_addr, remote_port);
+        int write(const char* data, size_t len) {
+            int result = -1;
+            if (!is_valid() || user_closed_ || err_ != 0) {
+                return result;
+            }
+
+            result = 0;
+            const char* write_data = data;
+            size_t      write_size = len;
+            while (write_size > 0) {
+                size_t current_try_write_size = std::max<size_t>(max_size_per_write, write_size);
+                int written_size = send(native_handle(), write_data, current_try_write_size, 0);
+                if (written_size == -1) {
+                    const int err = Error::get_last_error();
+                    if (err == EINTR) {
+                        continue;
+                    }
+
+                    if (err == EAGAIN) {
+                        continue;
+                    }
+
+                    err_ = err;
+                    close_handle();
+                    return -1;
+                }
+
+                write_data  += written_size;
+                write_size  -= written_size;
+                result      += written_size;
+            }
+
+            return result;
+        }
+
+        // result -1: some error happened
+        // result 0: write succeed, but not ensure io operation is succeed
+        int write_async(const char* data, size_t len) {
+            int result = -1;
+            if (!is_valid() || user_closed_ || err_ != 0) {
+                return result;
+            }
+
+            if (write_buff_ == nullptr) {
+                write_buff_ = new simple_buffer(max_write_buff_size);
+            }
+
+            write_buff_->write(data, len);
+            result = 0;
+            return result;
         }
     private:
-        socket_t    sock_;
-        void*       user_data_          = nullptr;
-        bool        delay_close_        = false;
-        char        remote_addr[64]     = { 0 };
-        int         remote_port         = 0;
+        void close_handle() {
+            if (!is_valid()) {
+                return;
+            }
+
+#ifdef _WIN32
+            closesocket(sock_);
+#endif
+
+#ifdef __linux__ || __APPLE__
+            close(socket_);
+#endif
+
+            sock_ = invalid_socket;
+        }
+
+        virtual bool is_listener() { return false; }
+
+        static bool set_non_blocking(socket_t sock) {
+#ifdef _WIN32
+            u_long option = 0;
+            int result = ioctlsocket(sock, FIONBIO, &option);
+            return result == 0;
+#endif
+
+#ifdef __linux__ || __APPLE__
+            int option = fcntl(sock, F_GETFL, 0);
+            int result = fcntl(sock, F_SETFL, &option | O_NONBLOCK);
+            return result == 0;
+#endif
+        }
+
+        void set_remote_addr(const char* addr, int port) {
+            memcpy(remote_addr_, addr, 16);
+            remote_port_ = port;
+        }
+
+        static void safe_delete(Socket* socket) {
+            if (socket != nullptr) {
+                delete socket->buff_;
+                if (socket->write_buff_ != nullptr) {
+                    delete socket->write_buff_;
+                }
+
+                delete socket;
+            }
+        }
+
+        friend void WINAPI IOCompletionCallBack(DWORD, DWORD, LPOVERLAPPED);
+    private:
+        struct simple_buffer {
+            friend class Poller;
+            std::vector<char> buff;
+            size_t begin;
+            size_t end;
+            simple_buffer(size_t initial_capacity = 8192)
+                : buff(initial_capacity), begin(0), end(0) {}
+
+            void clear() {
+                begin = end = 0;
+            }
+
+            char* data() {
+                return buff.data();
+            }
+
+            // already written data size
+            size_t been_written_size() const {
+                return end - begin;
+            }
+
+            size_t residual_size() const {
+                return buff.size() - end;
+            }
+
+            void write(const char* data, size_t len) {
+                ensure_writable_bytes(len);
+                memcpy(buff.data(), data, len);
+                end += len;
+            }
+
+            void ensure_writable_bytes(size_t size) {
+                size_t writable_bytes = buff.size() - end;
+                if (writable_bytes < size) {
+                    // 如果总空间不足，扩展缓冲区
+                    size_t new_capacity = buff.size() * 2;
+                    while (new_capacity < buff.size() + size) {
+                        new_capacity *= 2;
+                    }
+                    buff.resize(new_capacity);
+                }
+            }
+        };
+    private:
+        socket_t        sock_               = invalid_socket;
+        void*           user_data_          = nullptr;
+        char            remote_addr_[16]    = { 0 };
+        int             remote_port_        = 0;
+        simple_buffer*  buff_               = nullptr;
+        simple_buffer*  write_buff_         = nullptr;
+        bool            io_completed_       = false;
+        int             err_                = 0;
+        bool            user_closed_        = false;
+
+        WSABUF          wsa_buf_            = {};
+        WSAOVERLAPPED   wsovl_              = {};
     };
 
     class listener : public Socket {
     public:
-        listener(socket_t sock)
+        explicit listener(socket_t sock)
             : Socket(sock) {}
-        ~listener() override {}
 
-        void set_connection_callback(ConnectionCallback callback) {
-            on_connection_ = callback;
-        }
-
-        void on_connection(Socket* socket) const {
-            if (on_connection_ != nullptr) {
-                on_connection_(socket);
-            }
-        }
-
-        bool is_listener() override { return true; }
+        ~listener() override = default;
     private:
-        ConnectionCallback on_connection_ = nullptr;
+        bool is_listener() override { return true; }
     };
 }
 

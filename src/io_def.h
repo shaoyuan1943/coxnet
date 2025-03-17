@@ -25,12 +25,13 @@
     #endif
 #endif
 
+#include <string>
+
 namespace coxnet {
-    enum class IOType {
-        kRead,
-        kWrite,
-        kAccept,
-        kConnect
+    enum class SocketErr {
+        kSucceed,
+        kAlreadyDisconnected,
+        kTimeout
     };
 
 #ifdef _WIN32
@@ -74,6 +75,14 @@ namespace coxnet {
         int         error_code          = 0;
         void*       context             = nullptr;
     };
+
+    // socket read and write buffer size
+    static constexpr size_t max_read_buff_size  = (size_t)(1024 * 4);
+    static constexpr size_t max_write_buff_size = (size_t)(1024 * 4);
+
+    // every io operation size
+    static constexpr size_t max_size_per_write  = (size_t)(1024 * 2);
+    static constexpr size_t max_size_per_read   = (size_t)(1024 * 2);
 } // namespace coxcp
 
 #endif //IO_DEF_H
