@@ -46,6 +46,61 @@ namespace coxnet {
         Poller(Poller&& other) = delete;
         Poller& operator=(Poller&& other) = delete;
 
+        Socket* connect(const char address[], const uint32_t port) {
+            IPType net_type = ip_address_version(std::string(address));
+            if (net_type == IPType::kInvalid) {
+                return nullptr;
+            }
+
+            socket_t sock_handle = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+            if (sock_handle == invalid_socket) {
+                return nullptr;
+            }
+
+            in_addr ip_addr {};
+            if (inet_pton(AF_INET, address, &ip_addr) == 0) {
+                return nullptr;
+            }
+
+            sockaddr_in remote_addr = {};
+            remote_addr.sin_family       = AF_INET;
+            remote_addr.sin_addr.s_addr  = ip_addr.S_un.S_addr;
+            remote_addr.sin_port         = htons(port);
+
+            int result = ::connect(sock_handle, (sockaddr*)(&remote_addr), sizeof(sockaddr_in));
+            if (result == SOCKET_ERROR) {
+                if (int err = Error::get_last_error(); err != WSAEWOULDBLOCK) {
+                    // TODO: async operation is in progress, ignore this error code
+                } else {
+                    return nullptr;
+                }
+            }
+
+            if (!Socket::set_non_blocking(sock_handle)) {
+                return nullptr;
+            }
+
+            fd_set write_set;
+            FD_ZERO(&write_set);
+            FD_SET(sock_handle, &write_set);
+
+            timeval timeout {5, 0};
+            // use select to ensure connect operation succeed
+            result = select((int)(sock_handle + 1), nullptr, &write_set, nullptr, &timeout);
+            if (result != 1) {
+                if (sock_handle != invalid_socket) {
+                    closesocket(sock_handle);
+                }
+                return nullptr;
+            }
+
+            // TODO: need get error?
+
+            auto* socket = new Socket(sock_handle);
+            connections_.emplace(socket->native_handle(), socket);
+            return socket;
+        }
+
         bool listen(const char address[], const uint32_t port, ConnectionCallback on_connection, DataCallback on_data, CloseCallback on_close) {
             IPType net_type = ip_address_version(std::string(address));
             if (net_type == IPType::kInvalid) {
