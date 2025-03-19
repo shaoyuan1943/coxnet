@@ -2,7 +2,7 @@
 enable_testing()
 
 # 添加 Catch2 头文件路径
-include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../3rdparty/catch2)
+#include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../3rdparty/catch2)
 
 # 获取所有测试子目录
 file(GLOB TEST_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/test_*)
@@ -16,7 +16,7 @@ foreach(TEST_DIR ${TEST_DIRS})
     get_filename_component(TEST_NAME ${TEST_DIR} NAME)
 
     # 查找测试源文件
-    file(GLOB TEST_SOURCES "${TEST_DIR}/*.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/../3rdparty/catch2/*.cpp")
+    file(GLOB TEST_SOURCES "${TEST_DIR}/*.cpp")
 
     # 如果找到源文件，创建测试可执行文件
     if(TEST_SOURCES)
