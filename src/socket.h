@@ -21,7 +21,7 @@ namespace coxnet {
         friend class Poller;
         explicit Socket(socket_t sock) {
             sock_ = sock;
-            if (!is_listener()) {
+            if (!Socket::is_listener()) {
                 buff_ = new simple_buffer(max_read_buff_size);
             }
         }

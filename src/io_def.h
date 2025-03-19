@@ -48,7 +48,7 @@ namespace coxnet {
     public:
         static std::string get_last_error_string() {
 #ifdef _WIN32
-            DWORD err = WSAGetLastError();
+            const DWORD err = WSAGetLastError();
             char* buffer = nullptr;
 
             FormatMessageA(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,

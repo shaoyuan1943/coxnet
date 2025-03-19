@@ -57,17 +57,14 @@ namespace coxnet {
                 return nullptr;
             }
 
-            in_addr ip_addr {};
-            if (inet_pton(AF_INET, address, &ip_addr) == 0) {
+            sockaddr_in remote_addr = {};
+            remote_addr.sin_family       = AF_INET;
+            remote_addr.sin_port         = htons(port);
+            if (inet_pton(AF_INET, address, &remote_addr.sin_addr) <= 0) {
                 return nullptr;
             }
 
-            sockaddr_in remote_addr = {};
-            remote_addr.sin_family       = AF_INET;
-            remote_addr.sin_addr.s_addr  = ip_addr.S_un.S_addr;
-            remote_addr.sin_port         = htons(port);
-
-            int result = ::connect(sock_handle, (sockaddr*)(&remote_addr), sizeof(sockaddr_in));
+            int result = ::connect(sock_handle, reinterpret_cast<sockaddr*>(&remote_addr), sizeof(sockaddr_in));
             if (result == SOCKET_ERROR) {
                 if (int err = Error::get_last_error(); err != WSAEWOULDBLOCK) {
                     // TODO: async operation is in progress, ignore this error code
@@ -88,9 +85,7 @@ namespace coxnet {
             // use select to ensure connect operation succeed
             result = select((int)(sock_handle + 1), nullptr, &write_set, nullptr, &timeout);
             if (result != 1) {
-                if (sock_handle != invalid_socket) {
-                    closesocket(sock_handle);
-                }
+                closesocket(sock_handle);
                 return nullptr;
             }
 
@@ -107,13 +102,15 @@ namespace coxnet {
                 return false;
             }
 
-            SOCKET sock = ::socket(AF_INET , SOCK_STREAM, IPPROTO_IP);
-            if (sock == invalid_socket) {
+            sockaddr_in local_addr = {};
+            local_addr.sin_family       = AF_INET;
+            local_addr.sin_port         = htons(port);
+            if (inet_pton(AF_INET, address, &local_addr.sin_addr) <= 0) {
                 return false;
             }
 
-            in_addr ip_addr {};
-            if (inet_pton(AF_INET, address, &ip_addr) == 0) {
+            SOCKET sock = ::socket(AF_INET , SOCK_STREAM, IPPROTO_IP);
+            if (sock == invalid_socket) {
                 return false;
             }
 
@@ -122,11 +119,6 @@ namespace coxnet {
             if (result == SOCKET_ERROR) {
                 return false;
             }
-
-            sockaddr_in local_addr = {};
-            local_addr.sin_family       = AF_INET;
-            local_addr.sin_addr.s_addr  = ip_addr.S_un.S_addr;
-            local_addr.sin_port         = htons(port);
 
             result = ::bind(sock, reinterpret_cast<sockaddr*>(&local_addr), sizeof(local_addr));
             if (result == SOCKET_ERROR) {
