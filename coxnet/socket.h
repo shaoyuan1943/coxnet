@@ -71,7 +71,7 @@ namespace coxnet {
             size_t      write_size = len;
             while (write_size > 0) {
                 size_t current_try_write_size = std::max<size_t>(max_size_per_write, write_size);
-                int written_size = send(native_handle(), write_data, current_try_write_size, 0);
+                int written_size = ::send(native_handle(), write_data, current_try_write_size, 0);
                 if (written_size == -1) {
                     const int err = Error::get_last_error();
                     if (err == EINTR) {
@@ -229,6 +229,16 @@ namespace coxnet {
     private:
         bool is_listener() override { return true; }
     };
+
+    static void init_socket_env() {
+#ifdef _WIN32
+        WSAData wsa_data;
+        int result = ::WSAStartup(MAKEWORD(2, 2), &wsa_data);
+        if (result != 0) {
+            // error happened
+        }
+#endif
+    }
 }
 
 #endif //SOCKET_H

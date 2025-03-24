@@ -42,3 +42,21 @@ cmake-build-release/*.*
 
 build/*
 build/*.*
+
+samples/my_server/cmake-build-debug/*
+samples/my_server/cmake-build-debug/*.*
+
+samples/my_server/cmake-build-release/*
+samples/my_server/cmake-build-release/*.*
+
+samples/my_client/cmake-build-debug/*
+samples/my_client/cmake-build-debug/*.*
+
+samples/my_client/cmake-build-release/*
+samples/my_client/cmake-build-release/*.*
+
+samples/my_client/.idea/*
+samples/my_client/.idea/*.*
+
+samples/my_server/.idea/*
+samples/my_server/.idea/*.*

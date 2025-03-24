@@ -9,6 +9,8 @@
 #include <thread>
 #include <chrono>
 
+#include <iostream>
+
 class ListenNode;
 namespace coxnet {
     static void WINAPI IOCompletionCallBack(DWORD err_code, DWORD transferred_bytes, LPOVERLAPPED over_lapped) {
@@ -49,11 +51,13 @@ namespace coxnet {
         Socket* connect(const char address[], const uint32_t port) {
             IPType net_type = ip_address_version(std::string(address));
             if (net_type == IPType::kInvalid) {
+                std::cout << "invliad ip type1" << std::endl;
                 return nullptr;
             }
 
             socket_t sock_handle = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
             if (sock_handle == invalid_socket) {
+                std::cout << "invliad ip type2" << std::endl;
                 return nullptr;
             }
 
@@ -61,6 +65,7 @@ namespace coxnet {
             remote_addr.sin_family       = AF_INET;
             remote_addr.sin_port         = htons(port);
             if (inet_pton(AF_INET, address, &remote_addr.sin_addr) <= 0) {
+                std::cout << "invliad ip type3" << std::endl;
                 return nullptr;
             }
 
@@ -69,11 +74,13 @@ namespace coxnet {
                 if (int err = Error::get_last_error(); err != WSAEWOULDBLOCK) {
                     // TODO: async operation is in progress, ignore this error code
                 } else {
+                    std::cout << "invliad ip type4" << std::endl;
                     return nullptr;
                 }
             }
 
             if (!Socket::set_non_blocking(sock_handle)) {
+                std::cout << "invliad ip type5" << std::endl;
                 return nullptr;
             }
 
@@ -86,6 +93,7 @@ namespace coxnet {
             result = select((int)(sock_handle + 1), nullptr, &write_set, nullptr, &timeout);
             if (result != 1) {
                 closesocket(sock_handle);
+                std::cout << "invliad ip type6" << std::endl;
                 return nullptr;
             }
 
@@ -204,7 +212,7 @@ namespace coxnet {
                 }
             }
 
-            WSACleanup();
+            ::WSACleanup();
             connections_.clear();
         }
     private:
@@ -217,7 +225,7 @@ namespace coxnet {
             while (sock_listener_->is_valid()) {
                 memset(&remote_addr, 0, sizeof(sockaddr_in));
 
-                socket = accept(sock_listener_->native_handle(), reinterpret_cast<sockaddr*>(&remote_addr), &addr_len);
+                socket = ::accept(sock_listener_->native_handle(), reinterpret_cast<sockaddr*>(&remote_addr), &addr_len);
                 if (socket == invalid_socket) {
                     break;
                 }
@@ -232,7 +240,7 @@ namespace coxnet {
                 char ipv4_addr_str[16] = { 0 };
                 inet_ntop(AF_INET, &remote_addr.sin_addr, ipv4_addr_str, sizeof(ipv4_addr_str));
                 conn_socket->set_remote_addr(ipv4_addr_str, ntohs(remote_addr.sin_port));
-                if (!BindIoCompletionCallback(
+                if (!::BindIoCompletionCallback(
                         reinterpret_cast<HANDLE>(conn_socket->native_handle()), IOCompletionCallBack, 0)) {
                     conn_socket->close_handle();
                     Socket::safe_delete(conn_socket);
@@ -267,7 +275,7 @@ namespace coxnet {
 
             DWORD   recv_bytes        = 0;
             DWORD   flags             = 0;
-            int result = WSARecv(socket->native_handle(), &socket->wsa_buf_, 1, &recv_bytes, &flags, &socket->wsovl_, NULL);
+            int result = ::WSARecv(socket->native_handle(), &socket->wsa_buf_, 1, &recv_bytes, &flags, &socket->wsovl_, NULL);
             if (result == SOCKET_ERROR) {
                 int err = Error::get_last_error();
                 if (err != WSA_IO_PENDING) {
