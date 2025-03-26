@@ -21,44 +21,28 @@ namespace coxnet {
         friend class Poller;
         explicit Socket(socket_t sock) {
             sock_ = sock;
-            if (!Socket::is_listener()) {
-                buff_ = new simple_buffer(max_read_buff_size);
+            if (!Socket::_is_listener()) {
+                read_buff_ = new simple_buffer(max_read_buff_size);
             }
         }
 
-        virtual ~Socket() {
-            this->close_handle();
-        }
+        virtual ~Socket() { this->_close_handle(); }
 
         Socket(const Socket&) = delete;
         Socket& operator=(const Socket&) = delete;
         Socket(Socket&& other) = delete;
         Socket& operator=(Socket&& other) = delete;
 
-        socket_t native_handle() const {
-            return sock_;
-        }
+        socket_t native_handle() const { return sock_; }
 
-        bool is_valid() const {
-            return sock_ != invalid_socket;
-        }
+        bool is_valid() const { return sock_ != invalid_socket && err_ == 0 && !user_closed_; }
 
         void user_close() {
             user_closed_ = true;
-            close_handle();
+            _close_handle();
         }
 
-        void* user_data() const {
-            return user_data_;
-        }
-
-        void set_user_data(void* usr_data) {
-            user_data_ = usr_data;
-        }
-
-        std::tuple<char*, int> remote_addr() {
-            return std::make_tuple(remote_addr_, remote_port_);
-        }
+        std::tuple<char*, int> remote_addr() { return std::make_tuple(remote_addr_, remote_port_); }
 
         int write(const char* data, size_t len) {
             int result = -1;
@@ -70,7 +54,7 @@ namespace coxnet {
             const char* write_data = data;
             size_t      write_size = len;
             while (write_size > 0) {
-                size_t current_try_write_size = std::max<size_t>(max_size_per_write, write_size);
+                size_t current_try_write_size = std::min<size_t>(max_size_per_write, write_size);
                 int written_size = ::send(native_handle(), write_data, current_try_write_size, 0);
                 if (written_size == -1) {
                     const int err = Error::get_last_error();
@@ -83,7 +67,7 @@ namespace coxnet {
                     }
 
                     err_ = err;
-                    close_handle();
+                    _close_handle();
                     return -1;
                 }
 
@@ -112,7 +96,7 @@ namespace coxnet {
             return result;
         }
     private:
-        void close_handle() {
+        void _close_handle() {
             if (!is_valid()) {
                 return;
             }
@@ -128,11 +112,11 @@ namespace coxnet {
             sock_ = invalid_socket;
         }
 
-        virtual bool is_listener() { return false; }
+        virtual bool _is_listener() { return false; }
 
-        static bool set_non_blocking(socket_t sock) {
+        static bool _set_non_blocking(socket_t sock) {
 #ifdef _WIN32
-            u_long option = 0;
+            u_long option = 1;
             int result = ioctlsocket(sock, FIONBIO, &option);
             return result == 0;
 #endif
@@ -144,18 +128,15 @@ namespace coxnet {
 #endif
         }
 
-        void set_remote_addr(const char* addr, int port) {
+        void _set_remote_addr(const char* addr, int port) {
             memcpy(remote_addr_, addr, 16);
             remote_port_ = port;
         }
 
-        static void safe_delete(Socket* socket) {
+        static void _safe_delete(Socket* socket) {
             if (socket != nullptr) {
-                delete socket->buff_;
-                if (socket->write_buff_ != nullptr) {
-                    delete socket->write_buff_;
-                }
-
+                delete socket->read_buff_;
+                delete socket->write_buff_;
                 delete socket;
             }
         }
@@ -164,28 +145,21 @@ namespace coxnet {
     private:
         struct simple_buffer {
             friend class Poller;
-            std::vector<char> buff;
-            size_t begin;
-            size_t end;
+            std::vector<char>   buff;
+            size_t              begin;
+            size_t              end;
+
             simple_buffer(size_t initial_capacity = 8192)
                 : buff(initial_capacity), begin(0), end(0) {}
 
-            void clear() {
-                begin = end = 0;
-            }
+            void clear() { begin = end = 0; }
 
-            char* data() {
-                return buff.data();
-            }
+            char* data() { return buff.data(); }
 
             // already written data size
-            size_t been_written_size() const {
-                return end - begin;
-            }
+            size_t been_written_size() const { return end - begin; }
 
-            size_t residual_size() const {
-                return buff.size() - end;
-            }
+            size_t residual_size() const { return buff.size() - end; }
 
             void write(const char* data, size_t len) {
                 ensure_writable_bytes(len);
@@ -208,11 +182,14 @@ namespace coxnet {
     private:
         socket_t        sock_               = invalid_socket;
         void*           user_data_          = nullptr;
+
         char            remote_addr_[16]    = { 0 };
         int             remote_port_        = 0;
-        simple_buffer*  buff_               = nullptr;
+
+        simple_buffer*  read_buff_          = nullptr;
         simple_buffer*  write_buff_         = nullptr;
         bool            io_completed_       = false;
+
         int             err_                = 0;
         bool            user_closed_        = false;
 
@@ -227,7 +204,7 @@ namespace coxnet {
 
         ~listener() override = default;
     private:
-        bool is_listener() override { return true; }
+        bool _is_listener() override { return true; }
     };
 
     static void init_socket_env() {

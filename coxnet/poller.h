@@ -28,11 +28,11 @@ namespace coxnet {
         }
 
         if (socket->err_ != 0) {
-            socket->close_handle();
+            socket->_close_handle();
         }
 
         socket->io_completed_ = true;
-        socket->buff_->end += transferred_bytes;
+        socket->read_buff_->end += transferred_bytes;
     }
 
     class Poller {
@@ -48,16 +48,14 @@ namespace coxnet {
         Poller(Poller&& other) = delete;
         Poller& operator=(Poller&& other) = delete;
 
-        Socket* connect(const char address[], const uint32_t port) {
+        Socket* connect(const char address[], const uint32_t port, DataCallback on_data, CloseCallback on_close) {
             IPType net_type = ip_address_version(std::string(address));
             if (net_type == IPType::kInvalid) {
-                std::cout << "invliad ip type1" << std::endl;
                 return nullptr;
             }
 
             socket_t sock_handle = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
             if (sock_handle == invalid_socket) {
-                std::cout << "invliad ip type2" << std::endl;
                 return nullptr;
             }
 
@@ -65,7 +63,6 @@ namespace coxnet {
             remote_addr.sin_family       = AF_INET;
             remote_addr.sin_port         = htons(port);
             if (inet_pton(AF_INET, address, &remote_addr.sin_addr) <= 0) {
-                std::cout << "invliad ip type3" << std::endl;
                 return nullptr;
             }
 
@@ -74,13 +71,11 @@ namespace coxnet {
                 if (int err = Error::get_last_error(); err != WSAEWOULDBLOCK) {
                     // TODO: async operation is in progress, ignore this error code
                 } else {
-                    std::cout << "invliad ip type4" << std::endl;
                     return nullptr;
                 }
             }
 
-            if (!Socket::set_non_blocking(sock_handle)) {
-                std::cout << "invliad ip type5" << std::endl;
+            if (!Socket::_set_non_blocking(sock_handle)) {
                 return nullptr;
             }
 
@@ -93,14 +88,29 @@ namespace coxnet {
             result = select((int)(sock_handle + 1), nullptr, &write_set, nullptr, &timeout);
             if (result != 1) {
                 closesocket(sock_handle);
-                std::cout << "invliad ip type6" << std::endl;
                 return nullptr;
             }
 
-            // TODO: need get error?
+            result = ::BindIoCompletionCallback(reinterpret_cast<HANDLE>(sock_handle), IOCompletionCallBack, 0);
+            if (!result) {
+                closesocket(sock_handle);
+                return nullptr;
+            }
 
             auto* socket = new Socket(sock_handle);
             connections_.emplace(socket->native_handle(), socket);
+            if (on_data != nullptr) {
+                on_data_ = std::move(on_data);
+            }
+
+            if (on_close != nullptr) {
+                on_close_ = std::move(on_close);
+            }
+
+            socket->_set_remote_addr(address, port);
+
+            // IMPORTANT: trigger first io
+            socket->io_completed_ = true;
             return socket;
         }
 
@@ -138,14 +148,23 @@ namespace coxnet {
                 return false;
             }
 
-            if (!Socket::set_non_blocking(sock)) {
+            if (!Socket::_set_non_blocking(sock)) {
                 return false;
             }
 
             sock_listener_  = new listener(sock);
-            on_connection_  = std::move(on_connection);
-            on_data_        = std::move(on_data);
-            on_close_       = std::move(on_close);
+
+            if (on_connection != nullptr) {
+                on_connection_ = std::move(on_connection);
+            }
+
+            if (on_data != nullptr) {
+                on_data_ = std::move(on_data);
+            }
+
+            if (on_close != nullptr) {
+                on_close_ = std::move(on_close);
+            }
 
             return true;
         }
@@ -155,9 +174,7 @@ namespace coxnet {
             static int  poll_count      = 0;
             static int  clean_interval  = 1000;
 
-            if (try_wait_connections() <= 0) {
-                return;
-            }
+            _try_wait_connections();
             
             if (++poll_count % clean_interval == 0) {
                 if (!connections_.empty()) {
@@ -168,8 +185,8 @@ namespace coxnet {
             auto iter = connections_.begin();
             while (iter != connections_.end()) {
                 Socket* socket = iter->second;
-                try_read_and_process_written(socket);
-                try_write_async(socket);
+                _try_read_and_recv(socket);
+                _try_write_async(socket);
 
                 ++iter;
                 if (!need_clean) {
@@ -179,8 +196,7 @@ namespace coxnet {
                 if (socket->err_ != 0 || socket->user_closed_) {
                     if (on_close_ != nullptr && socket->io_completed_) {
                         on_close_(socket, socket->user_closed_ ? 0 : socket->err_);
-
-                        Socket::safe_delete(socket);
+                        Socket::_safe_delete(socket);
                     }
 
                     connections_.erase(socket->native_handle());
@@ -192,11 +208,11 @@ namespace coxnet {
         // sync function
         void shut() {
             if (sock_listener_ != nullptr) {
-                sock_listener_->close_handle();
+                sock_listener_->_close_handle();
             }
 
             for (auto kv : connections_) {
-                kv.second->close_handle();
+                kv.second->_close_handle();
             }
 
             // sleep 100ms, wait io
@@ -206,7 +222,7 @@ namespace coxnet {
             for (auto& kv : connections_) {
                 while (true) {
                     if (kv.second->io_completed_) {
-                        Socket::safe_delete(kv.second);
+                        Socket::_safe_delete(kv.second);
                         break;
                     }
                 }
@@ -216,13 +232,13 @@ namespace coxnet {
             connections_.clear();
         }
     private:
-        int try_wait_connections() {
-            SOCKET      socket      = invalid_socket;
-            sockaddr_in remote_addr = {};
-            int         addr_len    = sizeof(sockaddr_in);
-            int         event_count = 0;
+        int _try_wait_connections() {
+            socket_t        socket      = invalid_socket;
+            sockaddr_in     remote_addr = {};
+            int             addr_len    = sizeof(sockaddr_in);
+            int             event_count = 0;
 
-            while (sock_listener_->is_valid()) {
+            while (sock_listener_ != nullptr && sock_listener_->is_valid()) {
                 memset(&remote_addr, 0, sizeof(sockaddr_in));
 
                 socket = ::accept(sock_listener_->native_handle(), reinterpret_cast<sockaddr*>(&remote_addr), &addr_len);
@@ -232,59 +248,60 @@ namespace coxnet {
 
                 event_count++;
 
-                if (!Socket::set_non_blocking(socket)) {
+                if (!Socket::_set_non_blocking(socket)) {
                     continue;
                 }
 
-                auto* conn_socket = new Socket(socket);
+                if (!::BindIoCompletionCallback(reinterpret_cast<HANDLE>(socket), IOCompletionCallBack, 0)) {
+                    closesocket(socket);
+                    continue;
+                }
+
+                auto* conn = new Socket(socket);
                 char ipv4_addr_str[16] = { 0 };
                 inet_ntop(AF_INET, &remote_addr.sin_addr, ipv4_addr_str, sizeof(ipv4_addr_str));
-                conn_socket->set_remote_addr(ipv4_addr_str, ntohs(remote_addr.sin_port));
-                if (!::BindIoCompletionCallback(
-                        reinterpret_cast<HANDLE>(conn_socket->native_handle()), IOCompletionCallBack, 0)) {
-                    conn_socket->close_handle();
-                    Socket::safe_delete(conn_socket);
-                    continue;
+                conn->_set_remote_addr(ipv4_addr_str, ntohs(remote_addr.sin_port));
+
+                connections_.emplace(conn->native_handle(), conn);
+                if (on_connection_ != nullptr) {
+                    on_connection_(conn);
                 }
 
-                connections_.emplace(conn_socket->native_handle(), conn_socket);
-                if (on_connection_ != nullptr) {
-                    on_connection_(conn_socket);
-                }
+                // IMPORTANT: trigger first io
+                conn->io_completed_ = true;
             }
 
             return event_count;
         }
-        void try_read_and_process_written(Socket* socket) {
-            if (!socket->io_completed_) {
+
+        void _try_read_and_recv(Socket* conn) {
+            if (!conn->io_completed_) {
                 return;
             }
 
-            if (socket->buff_->been_written_size()) {
-                if (on_data_ != nullptr) {
-                    on_data_(socket, socket->buff_->data(), socket->buff_->been_written_size());
-                }
+            if (conn->read_buff_->been_written_size() > 0 && on_data_ != nullptr) {
+                on_data_(conn, conn->read_buff_->data(), conn->read_buff_->been_written_size());
             }
 
-            socket->io_completed_ = false;
-            socket->buff_->clear();
+            conn->io_completed_ = false;
+            conn->read_buff_->clear();
 
-            socket->wsa_buf_.buf = socket->buff_->data();
-            socket->wsa_buf_.len = socket->buff_->residual_size();
-            memset(&socket->wsovl_, 0, sizeof(socket->wsovl_));
+            conn->wsa_buf_.buf = conn->read_buff_->data();
+            conn->wsa_buf_.len = conn->read_buff_->residual_size();
+            memset(&conn->wsovl_, 0, sizeof(conn->wsovl_));
 
             DWORD   recv_bytes        = 0;
             DWORD   flags             = 0;
-            int result = ::WSARecv(socket->native_handle(), &socket->wsa_buf_, 1, &recv_bytes, &flags, &socket->wsovl_, NULL);
+            int result =::WSARecv(conn->native_handle(), &conn->wsa_buf_, 1, &recv_bytes, &flags, &conn->wsovl_, NULL);
             if (result == SOCKET_ERROR) {
-                int err = Error::get_last_error();
-                if (err != WSA_IO_PENDING) {
-                    socket->err_ = err;
-                    socket->close_handle();
+                if (int err = Error::get_last_error(); err != WSA_IO_PENDING) {
+                    conn->err_ = err;
+                    conn->_close_handle();
                 }
             }
         }
-        void try_write_async(Socket* socket) {
+
+        void _try_write_async(Socket* socket) {
             if (socket->write_buff_ == nullptr || socket->write_buff_->been_written_size() <= 0) {
                 return;
             }
