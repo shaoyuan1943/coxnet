@@ -10,7 +10,7 @@
 
 namespace coxnet {
     class Poller;
-    class simple_buffer;
+    class SimpleBuffer;
     class Socket;
     using ConnectionCallback    = std::function<void (Socket* conn_socket)>;
     using CloseCallback         = std::function<void (Socket* conn_socket, int err)>;
@@ -22,7 +22,8 @@ namespace coxnet {
         explicit Socket(socket_t sock) {
             sock_ = sock;
             if (!Socket::_is_listener()) {
-                read_buff_ = new simple_buffer(max_read_buff_size);
+                read_buff_  = new SimpleBuffer(max_read_buff_size);
+                write_buff_ = new SimpleBuffer(max_write_buff_size);
             }
         }
 
@@ -50,22 +51,35 @@ namespace coxnet {
                 return result;
             }
 
+            if (write_buff_->written_size() > 0) {
+                write_buff_->write_to_tail(data, len);
+                return len;
+            }
+
             result = 0;
             const char* write_data = data;
             size_t      write_size = len;
+            size_t      target_size = len;
             while (write_size > 0) {
                 size_t current_try_write_size = std::min<size_t>(max_size_per_write, write_size);
                 int written_size = ::send(native_handle(), write_data, current_try_write_size, 0);
                 if (written_size == -1) {
                     const int err = Error::get_last_error();
-                    if (err == EINTR) {
-                        continue;
+#if defined(_WIN32)
+                    if (err == WSAEINTR || err == WSAEWOULDBLOCK) {
+                        write_buff_->write_to_tail(write_data, target_size - result);
+                        break;
                     }
-
-                    if (err == EAGAIN) {
-                        continue;
+#endif // _WIN32
+                        
+#if defined(__linux__)
+                    if (err == EINTR || err == EAGAIN || err == EWOULDBLOCK) {
+                        write_buff_->write_to_tail(write_data, target_size - result);
+                        epoll_event ev { .events = EPOLLIN | EPOLLOUT | EPOLLET, .data.ptr = this };
+                        epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, sock_, &ev);
+                        break;
                     }
-
+#endif // __linux__
                     err_ = err;
                     _close_handle();
                     return -1;
@@ -78,24 +92,60 @@ namespace coxnet {
 
             return result;
         }
+    private:
+        size_t _try_write_when_out_event_coming() {
+            if (write_buff_->written_size() <= 0) {
+                return -1;
+            }
+            
+            int     result      = 0;
+            char*   write_data  = write_buff_->data_from_head();
+            size_t  write_size  = write_buff_->written_size();
+            size_t  target_size = write_size;
 
-        // result -1: some error happened
-        // result 0: write succeed, but not ensure io operation is succeed
-        int write_async(const char* data, size_t len) {
-            int result = -1;
-            if (!is_valid() || user_closed_ || err_ != 0) {
-                return result;
+            while (write_size > 0) {
+                size_t current_try_write_size = std::min<size_t>(max_size_per_write, write_size);
+                int written_size = ::send(native_handle(), write_data, current_try_write_size, 0);
+                if (written_size == -1) {
+                    const int err = Error::get_last_error();
+#if defined(_WIN32)
+                    if (err == WSAEINTR || err == WSAEWOULDBLOCK) {
+                        write_buff_->seek_written(result);
+                        break;
+                    }
+#endif // _WIN32
+
+#if defined(__linux__)
+                    if (err == EINTR || err == EAGAIN || err == EWOULDBLOCK) {
+                        write_buff_->seek_written(result);
+                        epoll_event ev { .events = EPOLLIN | EPOLLOUT | EPOLLET, .data.ptr = this };
+                        epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, sock_, &ev);
+                        break;
+                    }
+#endif // __linux__
+
+                    err_ = err;
+                    _close_handle();
+                    return -1;
+                }
+
+                write_data  += written_size;
+                write_size  -= written_size;
+                result      += written_size;
+            }
+            
+            // all data written
+            if (result >= target_size) {
+                write_buff_->clear();
+#if defined(__linux__)
+            epoll_event ev { .events = EPOLLIN | EPOLLET, .data.ptr = this };
+            epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, sock_, &ev);
+#endif // __linux__
             }
 
-            if (write_buff_ == nullptr) {
-                write_buff_ = new simple_buffer(max_write_buff_size);
-            }
-
-            write_buff_->write(data, len);
-            result = 0;
             return result;
         }
-    private:
+        
         void _close_handle() {
             if (!is_valid()) {
                 return;
@@ -105,8 +155,8 @@ namespace coxnet {
             closesocket(sock_);
 #endif
 
-#ifdef __linux__ || __APPLE__
-            close(socket_);
+#if defined(__linux__) || defined(__APPLE__)
+            close(sock_);
 #endif
 
             sock_ = invalid_socket;
@@ -123,7 +173,7 @@ namespace coxnet {
 
 #ifdef __linux__ || __APPLE__
             int option = fcntl(sock, F_GETFL, 0);
-            int result = fcntl(sock, F_SETFL, &option | O_NONBLOCK);
+            int result = fcntl(sock, F_SETFL, option | O_NONBLOCK);
             return result == 0;
 #endif
         }
@@ -141,44 +191,10 @@ namespace coxnet {
             }
         }
 
+#ifdef _WIN32
         friend void WINAPI IOCompletionCallBack(DWORD, DWORD, LPOVERLAPPED);
-    private:
-        struct simple_buffer {
-            friend class Poller;
-            std::vector<char>   buff;
-            size_t              begin;
-            size_t              end;
+#endif //_WIN32
 
-            simple_buffer(size_t initial_capacity = 8192)
-                : buff(initial_capacity), begin(0), end(0) {}
-
-            void clear() { begin = end = 0; }
-
-            char* data() { return buff.data(); }
-
-            // already written data size
-            size_t been_written_size() const { return end - begin; }
-
-            size_t residual_size() const { return buff.size() - end; }
-
-            void write(const char* data, size_t len) {
-                ensure_writable_bytes(len);
-                memcpy(buff.data(), data, len);
-                end += len;
-            }
-
-            void ensure_writable_bytes(size_t size) {
-                size_t writable_bytes = buff.size() - end;
-                if (writable_bytes < size) {
-                    // 如果总空间不足，扩展缓冲区
-                    size_t new_capacity = buff.size() * 2;
-                    while (new_capacity < buff.size() + size) {
-                        new_capacity *= 2;
-                    }
-                    buff.resize(new_capacity);
-                }
-            }
-        };
     private:
         socket_t        sock_               = invalid_socket;
         void*           user_data_          = nullptr;
@@ -186,15 +202,20 @@ namespace coxnet {
         char            remote_addr_[16]    = { 0 };
         int             remote_port_        = 0;
 
-        simple_buffer*  read_buff_          = nullptr;
-        simple_buffer*  write_buff_         = nullptr;
+        SimpleBuffer*   read_buff_          = nullptr;
+        SimpleBuffer*   write_buff_         = nullptr;
         bool            io_completed_       = false;
 
         int             err_                = 0;
         bool            user_closed_        = false;
-
+#ifdef _WIN32
         WSABUF          wsa_buf_            = {};
         WSAOVERLAPPED   wsovl_              = {};
+#endif // _WIN32
+
+#if defined(__linux__)
+        int             epoll_fd_           = 0;
+#endif // __linux__
     };
 
     class listener : public Socket {

@@ -40,6 +40,7 @@ namespace coxnet {
     static constexpr socket_t invalid_socket = INVALID_SOCKET;
 #else
     using socket_t = int;
+    using SOCKET = socket_t;
     static constexpr socket_t invalid_socket = -1;
     static constexpr int SOCKET_ERROR = -1;
 #endif // _WIN32

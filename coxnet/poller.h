@@ -1,6 +1,8 @@
 #ifndef POLLER_H
 #define POLLER_H
 
+#ifdef _WIN32
+
 #include "io_def.h"
 #include "socket.h"
 
@@ -9,9 +11,6 @@
 #include <thread>
 #include <chrono>
 
-#include <iostream>
-
-class ListenNode;
 namespace coxnet {
     static void WINAPI IOCompletionCallBack(DWORD err_code, DWORD transferred_bytes, LPOVERLAPPED over_lapped) {
         Socket* socket = CONTAINING_RECORD(over_lapped, Socket, wsovl_);
@@ -32,7 +31,7 @@ namespace coxnet {
         }
 
         socket->io_completed_ = true;
-        socket->read_buff_->end += transferred_bytes;
+        socket->read_buff_->_add_written_from_overlap(transferred_bytes);
     }
 
     class Poller {
@@ -40,7 +39,7 @@ namespace coxnet {
         Poller() = default;
 
         ~Poller() {
-            delete sock_listener_;
+            shut();
         }
 
         Poller(const Poller&) = delete;
@@ -68,7 +67,7 @@ namespace coxnet {
 
             int result = ::connect(sock_handle, reinterpret_cast<sockaddr*>(&remote_addr), sizeof(sockaddr_in));
             if (result == SOCKET_ERROR) {
-                if (int err = Error::get_last_error(); err != WSAEWOULDBLOCK) {
+                if (int err = Error::get_last_error(); err == WSAEWOULDBLOCK) {
                     // TODO: async operation is in progress, ignore this error code
                 } else {
                     return nullptr;
@@ -279,14 +278,14 @@ namespace coxnet {
                 return;
             }
 
-            if (conn->read_buff_->been_written_size() > 0 && on_data_ != nullptr) {
-                on_data_(conn, conn->read_buff_->data(), conn->read_buff_->been_written_size());
+            if (conn->read_buff_->written_size() > 0 && on_data_ != nullptr) {
+                on_data_(conn, conn->read_buff_->data_from_head(), conn->read_buff_->written_size());
             }
 
             conn->io_completed_ = false;
             conn->read_buff_->clear();
 
-            conn->wsa_buf_.buf = conn->read_buff_->data();
+            conn->wsa_buf_.buf = conn->read_buff_->data_from_tail();
             conn->wsa_buf_.len = conn->read_buff_->residual_size();
             memset(&conn->wsovl_, 0, sizeof(conn->wsovl_));
 
@@ -302,22 +301,7 @@ namespace coxnet {
         }
 
         void _try_write_async(Socket* socket) {
-            if (socket->write_buff_ == nullptr || socket->write_buff_->been_written_size() <= 0) {
-                return;
-            }
-
-            const char* data = socket->write_buff_->data();
-            size_t len = socket->write_buff_->been_written_size();
-            int written_size = socket->write(data, len);
-            if (written_size <= -1) {   // some error happened
-                return;
-            }
-
-            if (written_size == len) {
-                socket->write_buff_->clear();
-            } else {
-                socket->write_buff_->end -= written_size;
-            }
+            socket->_try_write_when_out_event_coming();
         }
     private:
         listener*                               sock_listener_  = nullptr;
@@ -328,4 +312,7 @@ namespace coxnet {
         CloseCallback                           on_close_       = nullptr;
     };
 }
+
+#endif //_WIN32
+
 #endif //POLLER_H
