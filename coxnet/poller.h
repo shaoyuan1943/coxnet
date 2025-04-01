@@ -37,16 +37,17 @@ namespace coxnet {
     class Poller {
     public:
         Poller() = default;
-
-        ~Poller() {
-            shut();
-        }
+        ~Poller() = default;
 
         Poller(const Poller&) = delete;
         Poller& operator=(const Poller&) = delete;
         Poller(Poller&& other) = delete;
         Poller& operator=(Poller&& other) = delete;
 
+        bool setup() {
+            return true;
+        }
+ 
         Socket* connect(const char address[], const uint32_t port, DataCallback on_data, CloseCallback on_close) {
             IPType net_type = ip_address_version(std::string(address));
             if (net_type == IPType::kInvalid) {
@@ -169,11 +170,15 @@ namespace coxnet {
         }
 
         void poll() {
+            if (sock_listener_ == nullptr || !sock_listener_->is_valid()) {
+                return;
+            }
+
             static bool need_clean      = false;
             static int  poll_count      = 0;
             static int  clean_interval  = 1000;
 
-            _try_wait_connections();
+            _wait_new_connection();
             
             if (++poll_count % clean_interval == 0) {
                 if (!connections_.empty()) {
@@ -184,8 +189,8 @@ namespace coxnet {
             auto iter = connections_.begin();
             while (iter != connections_.end()) {
                 Socket* socket = iter->second;
-                _try_read_and_recv(socket);
-                _try_write_async(socket);
+                _read_and_recv(socket);
+                _write_async(socket);
 
                 ++iter;
                 if (!need_clean) {
@@ -227,11 +232,18 @@ namespace coxnet {
                 }
             }
 
-            ::WSACleanup();
             connections_.clear();
+
+            delete sock_listener_;
+            sock_listener_ = nullptr;
+
+            on_connection_  = nullptr;
+            on_data_        = nullptr;
+            on_close_       = nullptr;
+            
         }
     private:
-        int _try_wait_connections() {
+        int _wait_new_connection() {
             socket_t        socket      = invalid_socket;
             sockaddr_in     remote_addr = {};
             int             addr_len    = sizeof(sockaddr_in);
@@ -273,7 +285,7 @@ namespace coxnet {
             return event_count;
         }
 
-        void _try_read_and_recv(Socket* conn) {
+        void _read_and_recv(Socket* conn) {
             if (!conn->io_completed_) {
                 return;
             }
@@ -300,8 +312,8 @@ namespace coxnet {
             }
         }
 
-        void _try_write_async(Socket* socket) {
-            socket->_try_write_when_out_event_coming();
+        void _write_async(Socket* socket) {
+            socket->_try_write_when_io_event_coming();
         }
     private:
         listener*                               sock_listener_  = nullptr;

@@ -27,7 +27,7 @@ namespace coxnet {
             }
         }
 
-        virtual ~Socket() { this->_close_handle(); }
+        virtual ~Socket() {}
 
         Socket(const Socket&) = delete;
         Socket& operator=(const Socket&) = delete;
@@ -80,8 +80,7 @@ namespace coxnet {
                         break;
                     }
 #endif // __linux__
-                    err_ = err;
-                    _close_handle();
+                    _close_handle(err);
                     return -1;
                 }
 
@@ -93,7 +92,7 @@ namespace coxnet {
             return result;
         }
     private:
-        size_t _try_write_when_out_event_coming() {
+        size_t _try_write_when_io_event_coming() {
             if (write_buff_->written_size() <= 0) {
                 return -1;
             }
@@ -124,8 +123,7 @@ namespace coxnet {
                     }
 #endif // __linux__
 
-                    err_ = err;
-                    _close_handle();
+                    _close_handle(err);
                     return -1;
                 }
 
@@ -146,7 +144,7 @@ namespace coxnet {
             return result;
         }
         
-        void _close_handle() {
+        void _close_handle(int err = 0) {
             if (!is_valid()) {
                 return;
             }
@@ -159,7 +157,8 @@ namespace coxnet {
             close(sock_);
 #endif
 
-            sock_ = invalid_socket;
+            sock_   = invalid_socket;
+            err_    = err;
         }
 
         virtual bool _is_listener() { return false; }
@@ -236,6 +235,12 @@ namespace coxnet {
             // error happened
         }
 #endif
+    }
+
+    static void shut_socket_env() {
+#ifdef _WIN32
+        ::WSACleanup();
+#endif // _WIN32
     }
 }
 

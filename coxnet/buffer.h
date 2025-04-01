@@ -33,7 +33,6 @@ namespace coxnet {
 #endif // _WIN32
         void _add_written_from_io(size_t size) { end_ += size; }
 
-
         void _ensure_writable_bytes(size_t size) {
             size_t writable_bytes = writeable_size();
             if (writable_bytes < size) {

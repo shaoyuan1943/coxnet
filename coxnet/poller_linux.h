@@ -13,7 +13,15 @@
 namespace coxnet {
     class Poller {
     public:
-        Poller() {
+        Poller() = default;
+        ~Poller() = default;
+
+        Poller(const Poller&) = delete;
+        Poller& operator=(const Poller&) = delete;
+        Poller(Poller&& other) = delete;
+        Poller& operator=(Poller&& other) = delete;
+
+        bool setup() {
             event_count_    = 32;
             epoll_events_   = new epoll_event[event_count_];
             epoll_fd_       = epoll_create1(EPOLL_CLOEXEC);
@@ -21,13 +29,6 @@ namespace coxnet {
                 return;
             }
         }
-
-        ~Poller() {}
-
-        Poller(const Poller&) = delete;
-        Poller& operator=(const Poller&) = delete;
-        Poller(Poller&& other) = delete;
-        Poller& operator=(Poller&& other) = delete;
 
         Socket* connect(const char address[], uint32_t port, DataCallback on_data, CloseCallback on_close) {
             IPType net_type = ip_address_version(std::string(address));
@@ -157,11 +158,20 @@ namespace coxnet {
 
                 // if enable to write data, do it first whatever this socket has error
                 if (ev->events & EPOLLOUT) {
-                    socket->_try_write_when_out_event_coming();
+                    socket->_try_write_when_io_event_coming();
                 }
 
-                if (!(ev->events & EPOLLIN)) {
-                    // TODO: need deal with EPOLLERR or EPOLLHUP?
+                // when EPOLLHUP happend, read data first and then deal this error
+                if ((ev->events & EPOLLIN) || (ev->events & EPOLLHUP)) {
+                    _try_read_and_recv(socket);
+                    continue;
+                }
+
+                if ((ev->events & EPOLLERR) || (ev->events & EPOLLHUP)) {
+                    int err = 0;
+                    socklen_t err_len = sizeof(err);
+                    getsockopt(socket->native_handle(), SOL_SOCKET, SO_ERROR, &err, &err_len);
+                    socket->_close_handle(err);
                     continue;
                 }
 
@@ -170,14 +180,12 @@ namespace coxnet {
                 }
 
                 if (socket->_is_listener()) {
-                    if (_new_connection() == -1) {
+                    if (_wait_new_connection() == -1) {
                         sock_listener_->_close_handle();
                         break;
                     }
                     continue;
                 }
-
-                _try_read_and_recv(socket);
             }
 
             static bool need_clean      = false;
@@ -235,12 +243,19 @@ namespace coxnet {
 
             delete[] epoll_events_;
             epoll_events_ = nullptr;
+
+            delete sock_listener_;
+            sock_listener_ = nullptr;
+
+            on_connection_  = nullptr;
+            on_data_        = nullptr;
+            on_close_       = nullptr;
         }
     private:
-        int _new_connection() {
+        int _wait_new_connection() {
             int result = -1;
             if (sock_listener_ == nullptr || !sock_listener_->is_valid()) {
-                return;
+                return result;
             }
 
             sockaddr_in remote_addr { 0 };
@@ -248,11 +263,13 @@ namespace coxnet {
             
             int fd = accept(sock_listener_->native_handle(), (struct sockaddr*)(&remote_addr), &addr_len);
             if (fd == -1) {
-                if (int err = Error::get_last_error(); err == EINTR || err == EAGAIN || err == EWOULDBLOCK) {
+                int err = 0;
+                if (err = Error::get_last_error(); err == EINTR || err == EAGAIN || err == EWOULDBLOCK) {
                     return 0;
                 }
 
                 // TODO: error
+                sock_listener_->err_ = err;
                 return -1;
             }
 
@@ -289,8 +306,9 @@ namespace coxnet {
 
                 result = recv(conn->native_handle(), data, writeable_size, 0);
                 if (result == 0 || result == -1) {
+                    int err = 0;
                     if (result == -1) {
-                        if (int err = Error::get_last_error(); err == EINTR || err == EAGAIN || err == EWOULDBLOCK) {
+                        if (err = Error::get_last_error(); err == EINTR || err == EAGAIN || err == EWOULDBLOCK) {
                             if (err == EINTR) { continue; }
                             break;
                         }
@@ -300,9 +318,7 @@ namespace coxnet {
                         on_data_(conn, conn->read_buff_->data_from_head(), readed_size);
                     }
 
-                    conn->read_buff_->clear();
-                    conn->_close_handle();
-                    epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, conn_fd, nullptr);
+                    conn->_close_handle(err);
                     return;
                 }
 
