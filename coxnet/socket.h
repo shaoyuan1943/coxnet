@@ -15,6 +15,7 @@ namespace coxnet {
     using ConnectionCallback    = std::function<void (Socket* conn_socket)>;
     using CloseCallback         = std::function<void (Socket* conn_socket, int err)>;
     using DataCallback          = std::function<void (Socket* conn_socket, const char* data, size_t size)>;
+    using ListenErrorCallback   = std::function<void(int err)>;
 
     class Socket {
     public:
@@ -35,7 +36,6 @@ namespace coxnet {
         Socket& operator=(Socket&& other) = delete;
 
         socket_t native_handle() const { return sock_; }
-
         bool is_valid() const { return sock_ != invalid_socket && err_ == 0 && !user_closed_; }
 
         void user_close() {
@@ -57,8 +57,8 @@ namespace coxnet {
             }
 
             result = 0;
-            const char* write_data = data;
-            size_t      write_size = len;
+            const char* write_data  = data;
+            size_t      write_size  = len;
             size_t      target_size = len;
             while (write_size > 0) {
                 size_t current_try_write_size = std::min<size_t>(max_size_per_write, write_size);

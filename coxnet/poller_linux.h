@@ -181,7 +181,9 @@ namespace coxnet {
 
                 if (socket->_is_listener()) {
                     if (_wait_new_connection() == -1) {
-                        sock_listener_->_close_handle();
+                        if (on_listen_err_ != nullptr) {
+                            on_listen_err_(sock_listener_->err_);
+                        }
                         break;
                     }
                     continue;
@@ -269,7 +271,7 @@ namespace coxnet {
                 }
 
                 // TODO: error
-                sock_listener_->err_ = err;
+                sock_listener_->_close_handle(err);
                 return -1;
             }
 
@@ -343,6 +345,7 @@ namespace coxnet {
         DataCallback                            on_data_        = nullptr;
         CloseCallback                           on_close_       = nullptr;
 
+        ListenErrorCallback                     on_listen_err_  = nullptr;
     };
 }
 
