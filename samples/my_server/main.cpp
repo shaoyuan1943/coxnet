@@ -8,20 +8,17 @@
 
 std::atomic<bool> g_exit_flag(false);
 
-// 递归终止
 template<typename T>
 void log_impl(std::ostream& os, T&& t) {
     os << std::forward<T>(t);
 }
 
-// 递归展开
 template<typename T, typename... Args>
 void log_impl(std::ostream& os, T&& t, Args&&... args) {
     os << std::forward<T>(t) << " ";
     log_impl(os, std::forward<Args>(args)...);
 }
 
-// 对外接口
 template<typename... Args>
 void log(Args&&... args) {
     log_impl(std::cout, std::forward<Args>(args)...);

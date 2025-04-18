@@ -45,46 +45,44 @@ namespace coxnet {
     static constexpr int SOCKET_ERROR = -1;
 #endif // _WIN32
 
-    class Error {
-    public:
-        static std::string get_last_error_string() {
-#ifdef _WIN32
-            const DWORD err = WSAGetLastError();
-            char* buffer = nullptr;
-
-            FormatMessageA(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
-                NULL, err, MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), (LPSTR)&buffer, 0, NULL);
-
-            std::string message(buffer);
-            LocalFree(buffer);
-            return message;
-#else
-            return std::string(strerror(errno));
-#endif
-        }
-
-        static int get_last_error() {
-#ifdef _WIN32
-            return WSAGetLastError();
-#else
-            return errno;
-#endif
-        }
+    enum class ErrorOperationState {
+        kSaveResidue,
+        kContinue,
+        kReturnWithClose
     };
 
-    struct IOResult {
-        std::size_t bytes_transferred   = 0;
-        int         error_code          = 0;
-        void*       context             = nullptr;
-    };
+    ErrorOperationState adjust_io_operation_error_state() {
+#if defined(_WIN32)
+        int errno = ::WSAGetLastError();
+        if (errno == WSAEWOULDBLOCK) {
+            return ErrorOperationState::kSaveResidue;
+        } else if (errno == WSAEINTR) {
+            return ErrorOperationState::kContinue;
+        } else {
+            return ErrorOperationState::ReturnWithClose;
+        }
+#endif // _WIN32
+
+#if defined(__linux__)
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            return ErrorOperationState::kSaveResidue;
+        } else if (errno == EINTR){
+            return ErrorOperationState::kContinue;
+        } else {
+            return ErrorOperationState::kReturnWithClose;
+        }
+#endif // __linux__
+    }
 
     // socket read and write buffer size
-    static constexpr size_t max_read_buff_size  = (size_t)(1024 * 4);
-    static constexpr size_t max_write_buff_size = (size_t)(1024 * 4);
+    static constexpr size_t max_read_buff_size      = (size_t)(1024 * 4);
+    static constexpr size_t max_write_buff_size     = (size_t)(1024 * 4);
 
     // every io operation size
-    static constexpr size_t max_size_per_write  = (size_t)(1024 * 2);
-    static constexpr size_t max_size_per_read   = (size_t)(1024 * 2);
+    static constexpr size_t max_size_per_write      = (size_t)(1024 * 2);
+    static constexpr size_t max_size_per_read       = (size_t)(1024 * 2);
+
+    static constexpr size_t max_epoll_event_count   = 32;
 
     enum class IPType { kInvalid, kIPv4, kIPv6 };
 

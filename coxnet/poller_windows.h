@@ -31,7 +31,7 @@ namespace coxnet {
         }
 
         socket->io_completed_ = true;
-        socket->read_buff_->_add_written_from_overlap(transferred_bytes);
+        socket->read_buff_->_add_written_from_io(transferred_bytes);
     }
 
     class Poller {
@@ -68,7 +68,7 @@ namespace coxnet {
 
             int result = ::connect(sock_handle, reinterpret_cast<sockaddr*>(&remote_addr), sizeof(sockaddr_in));
             if (result == SOCKET_ERROR) {
-                if (int err = Error::get_last_error(); err == WSAEWOULDBLOCK) {
+                if (::WSAGetLastError() == WSAEWOULDBLOCK) {
                     // TODO: async operation is in progress, ignore this error code
                 } else {
                     return nullptr;
@@ -291,21 +291,21 @@ namespace coxnet {
             }
 
             if (conn->read_buff_->written_size() > 0 && on_data_ != nullptr) {
-                on_data_(conn, conn->read_buff_->data_from_head(), conn->read_buff_->written_size());
+                on_data_(conn, conn->read_buff_->data(), conn->read_buff_->written_size());
             }
 
             conn->io_completed_ = false;
             conn->read_buff_->clear();
 
-            conn->wsa_buf_.buf = conn->read_buff_->data_from_tail();
-            conn->wsa_buf_.len = conn->read_buff_->residual_size();
+            conn->wsa_buf_.buf = conn->read_buff_->data();
+            conn->wsa_buf_.len = conn->read_buff_->original_size();
             memset(&conn->wsovl_, 0, sizeof(conn->wsovl_));
 
             DWORD   recv_bytes        = 0;
             DWORD   flags             = 0;
             int result =::WSARecv(conn->native_handle(), &conn->wsa_buf_, 1, &recv_bytes, &flags, &conn->wsovl_, NULL);
             if (result == SOCKET_ERROR) {
-                if (int err = Error::get_last_error(); err != WSA_IO_PENDING) {
+                if (int err = ::WSAGetLastError(); err != WSA_IO_PENDING) {
                     conn->err_ = err;
                     conn->_close_handle();
                 }

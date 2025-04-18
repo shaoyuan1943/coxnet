@@ -52,44 +52,36 @@ namespace coxnet {
             }
 
             if (write_buff_->written_size() > 0) {
-                write_buff_->write_to_tail(data, len);
+                write_buff_->write(data, len);
                 return len;
             }
 
-            result = 0;
-            const char* write_data  = data;
-            size_t      write_size  = len;
-            size_t      target_size = len;
-            while (write_size > 0) {
-                size_t current_try_write_size = std::min<size_t>(max_size_per_write, write_size);
-                int written_size = ::send(native_handle(), write_data, current_try_write_size, 0);
-                if (written_size == -1) {
-                    const int err = Error::get_last_error();
-#if defined(_WIN32)
-                    if (err == WSAEINTR || err == WSAEWOULDBLOCK) {
-                        write_buff_->write_to_tail(write_data, target_size - result);
-                        break;
-                    }
-#endif // _WIN32
-                        
+            size_t total_sent   = 0;
+            size_t data_len     = len;
+
+            while (total_sent < data_len) {
+                int sent_n = ::send(native_handle(), data + total_sent, data_len - total_sent, 0);
+                if (sent_n > 0) {
+                    total_sent += sent_n;
+                } else {
+                    ErrorOperationState state = adjust_io_operation_error_state();
+                    if (state == ErrorOperationState::kSaveResidue) {
+                        write_buff_->write(data + total_sent, data_len - total_sent);
 #if defined(__linux__)
-                    if (err == EINTR || err == EAGAIN || err == EWOULDBLOCK) {
-                        write_buff_->write_to_tail(write_data, target_size - result);
                         epoll_event ev { .events = EPOLLIN | EPOLLOUT | EPOLLET, .data.ptr = this };
                         epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, sock_, &ev);
-                        break;
-                    }
 #endif // __linux__
-                    _close_handle(err);
-                    return -1;
+                        break;
+                    } else if (state == ErrorOperationState::kContinue) {
+                        continue;
+                    } else {
+                        _close_handle(errno);
+                        return -1;
+                    }
                 }
-
-                write_data  += written_size;
-                write_size  -= written_size;
-                result      += written_size;
             }
 
-            return result;
+            return total_sent;
         }
     private:
         size_t _try_write_when_io_event_coming() {
@@ -97,51 +89,47 @@ namespace coxnet {
                 return -1;
             }
             
-            int     result      = 0;
-            char*   write_data  = write_buff_->data_from_head();
-            size_t  write_size  = write_buff_->written_size();
-            size_t  target_size = write_size;
-
-            while (write_size > 0) {
-                size_t current_try_write_size = std::min<size_t>(max_size_per_write, write_size);
-                int written_size = ::send(native_handle(), write_data, current_try_write_size, 0);
-                if (written_size == -1) {
-                    const int err = Error::get_last_error();
-#if defined(_WIN32)
-                    if (err == WSAEINTR || err == WSAEWOULDBLOCK) {
-                        write_buff_->seek_written(result);
+            size_t total_sent   = 0;
+            size_t data_len     = write_buff_->written_size();
+            while (total_sent < data_len) {
+                int sent_n = ::send(native_handle(), write_buff_->data_from_last_seek(), write_buff_->written_size(), 0);
+                if (sent_n > 0) {
+                    total_sent += sent_n;
+                    write_buff_->seek(sent_n);
+                } else {
+                    ErrorOperationState state = adjust_io_operation_error_state();
+                    if (state == ErrorOperationState::kSaveResidue) {
+#if defined(__linux__)
+                        epoll_event ev { .events = EPOLLIN | EPOLLOUT | EPOLLET, .data.ptr = this };
+                        epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, sock_, &ev);
+#endif // __linux__
                         break;
-                    }
+                    } else if (state == ErrorOperationState::kContinue) {
+                        continue;
+                    } else {
+                        int err = 0;
+#if defined(_WIN32)
+                        err = ::WSAGetLastError();
 #endif // _WIN32
 
 #if defined(__linux__)
-                    if (err == EINTR || err == EAGAIN || err == EWOULDBLOCK) {
-                        write_buff_->seek_written(result);
-                        epoll_event ev { .events = EPOLLIN | EPOLLOUT | EPOLLET, .data.ptr = this };
-                        epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, sock_, &ev);
-                        break;
-                    }
+                        err = errno;
 #endif // __linux__
-
-                    _close_handle(err);
-                    return -1;
+                        _close_handle(err);
+                        return -1;
+                    }
                 }
-
-                write_data  += written_size;
-                write_size  -= written_size;
-                result      += written_size;
             }
-            
-            // all data written
-            if (result >= target_size) {
+
+            if (total_sent >= data_len) {
                 write_buff_->clear();
 #if defined(__linux__)
-            epoll_event ev { .events = EPOLLIN | EPOLLET, .data.ptr = this };
-            epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, sock_, &ev);
+                epoll_event ev { .events = EPOLLIN | EPOLLET, .data.ptr = this };
+                epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, sock_, &ev);
 #endif // __linux__
             }
 
-            return result;
+            return total_sent;
         }
         
         void _close_handle(int err = 0) {

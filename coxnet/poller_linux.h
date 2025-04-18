@@ -22,8 +22,7 @@ namespace coxnet {
         Poller& operator=(Poller&& other) = delete;
 
         bool setup() {
-            event_count_    = 32;
-            epoll_events_   = new epoll_event[event_count_];
+            epoll_events_   = new epoll_event[max_epoll_event_count];
             epoll_fd_       = epoll_create1(EPOLL_CLOEXEC);
             if (epoll_fd_ == -1) {
                 return;
@@ -50,7 +49,7 @@ namespace coxnet {
 
             int result = ::connect(sock_handle, reinterpret_cast<sockaddr*>(&remote_addr), sizeof(sockaddr_in));
             if (result == SOCKET_ERROR) {
-                if (int err = Error::get_last_error(); err == EINPROGRESS) {
+                if (errno == EINPROGRESS) {
                     // TODO: async operation is in progress, ignore this error code
                 } else {
                     return nullptr;
@@ -149,7 +148,7 @@ namespace coxnet {
                 return -1;
             }
 
-            int count = epoll_wait(epoll_fd_, epoll_events_, event_count_, 0);
+            int count = epoll_wait(epoll_fd_, epoll_events_, max_epoll_event_count, 0);
             for (int i = 0; i < count; i++) {
                 epoll_event* ev = &epoll_events_[i];
                 Socket* socket = static_cast<Socket*>(ev->data.ptr);
@@ -265,13 +264,12 @@ namespace coxnet {
             
             int fd = accept(sock_listener_->native_handle(), (struct sockaddr*)(&remote_addr), &addr_len);
             if (fd == -1) {
-                int err = 0;
-                if (err = Error::get_last_error(); err == EINTR || err == EAGAIN || err == EWOULDBLOCK) {
+                if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) {
                     return 0;
                 }
 
                 // TODO: error
-                sock_listener_->_close_handle(err);
+                sock_listener_->_close_handle(errno);
                 return -1;
             }
 
@@ -303,33 +301,29 @@ namespace coxnet {
             size_t  readed_size     = 0;
 
             while (true) {
-                auto    data            = conn->read_buff_->data_from_tail();
-                auto    writeable_size  = conn->read_buff_->writeable_size();
-
-                result = recv(conn->native_handle(), data, writeable_size, 0);
-                if (result == 0 || result == -1) {
-                    int err = 0;
-                    if (result == -1) {
-                        if (err = Error::get_last_error(); err == EINTR || err == EAGAIN || err == EWOULDBLOCK) {
-                            if (err == EINTR) { continue; }
-                            break;
-                        }
+                auto data           = conn->read_buff_->data();
+                result = recv(conn->native_handle(), data, std::min<size_t>(max_size_per_read, conn->read_buff_->original_size()), 0);
+                if (result > 0) {
+                    readed_size += result;
+                    conn->read_buff_->_add_written_from_io(result);
+                    if (on_data_ != nullptr) {
+                        on_data_(conn, conn->read_buff_->data(), conn->read_buff_->original_size());
                     }
-
-                    if (readed_size > 0 && on_data_ != nullptr) {
-                        on_data_(conn, conn->read_buff_->data_from_head(), readed_size);
+                    conn->read_buff_->clear();
+                    continue;
+                } else if (result == 0) {
+                    conn->_close_handle(errno);
+                    break;
+                } else {
+                    if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                        break;
+                    } else if (errno == EINTR) {
+                        continue;
+                    } else {
+                        conn->_close_handle(errno);
+                        break;
                     }
-
-                    conn->_close_handle(err);
-                    return;
-                }
-
-                readed_size += result;
-                conn->read_buff_->_add_written_from_io(result);
-                if (on_data_ != nullptr) {
-                    on_data_(conn, conn->read_buff_->data_from_head(), conn->read_buff_->written_size());
-                }
-                conn->read_buff_->clear();
+                }  
             }
 
             conn->read_buff_->clear();
@@ -338,7 +332,6 @@ namespace coxnet {
         listener*                               sock_listener_  = nullptr;
         int                                     epoll_fd_       = -1;
         epoll_event*                            epoll_events_   = nullptr;
-        int                                     event_count_    = 0;
         std::unordered_map<socket_t, Socket*>   conns_          = {};
 
         ConnectionCallback                      on_connection_  = nullptr;

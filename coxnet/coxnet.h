@@ -2,11 +2,10 @@
 #define COXNET_H
 
 #include "buffer.h"
-#include "co_type.h"
 #include "io_def.h"
 
 #ifdef _WIN32
-#include "poller.h"
+#include "poller_windows.h"
 #endif
 
 #ifdef __linux__
