@@ -25,8 +25,10 @@ namespace coxnet {
             epoll_events_   = new epoll_event[max_epoll_event_count];
             epoll_fd_       = epoll_create1(EPOLL_CLOEXEC);
             if (epoll_fd_ == -1) {
-                return;
+                return false;
             }
+
+            return true;
         }
 
         Socket* connect(const char address[], uint32_t port, DataCallback on_data, CloseCallback on_close) {
@@ -282,7 +284,7 @@ namespace coxnet {
 
             epoll_event ev { .events = EPOLLIN | EPOLLET, .data.ptr = conn };
             epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, fd, &ev);
-            conns_.emplace(conn->native_handle(), socket);
+            conns_.emplace(conn->native_handle(), conn);
             
             if (on_connection_ != nullptr) {
                 on_connection_(conn);
@@ -302,12 +304,12 @@ namespace coxnet {
 
             while (true) {
                 auto data           = conn->read_buff_->data();
-                result = recv(conn->native_handle(), data, std::min<size_t>(max_size_per_read, conn->read_buff_->original_size()), 0);
+                result = recv(conn->native_handle(), data, conn->read_buff_->writable_size(), 0);
                 if (result > 0) {
                     readed_size += result;
                     conn->read_buff_->_add_written_from_io(result);
                     if (on_data_ != nullptr) {
-                        on_data_(conn, conn->read_buff_->data(), conn->read_buff_->original_size());
+                        on_data_(conn, conn->read_buff_->data(), conn->read_buff_->writable_size());
                     }
                     conn->read_buff_->clear();
                     continue;

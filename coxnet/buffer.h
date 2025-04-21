@@ -15,14 +15,15 @@ namespace coxnet {
             data_ = new char[size_];        
         }
 
-        ~SimpleBuffer()             { delete[] data_; }
-        void clear()                { begin_ = end_ = seek_index_ = 0; }
-        void seek(size_t size)      { seek_index_ += size; }
-        char* data()                { return data_; }
-        char* data_from_last_seek() { return &data_[seek_index_]; }
-        size_t written_size()       { return end_ - seek_index_; }
-        size_t original_size()      { return size_ - end_; }
-        
+        ~SimpleBuffer()                 { delete[] data_; }
+        void clear()                    { begin_ = end_ = seek_index_ = 0; }
+        void seek(size_t size)          { seek_index_ += size; }
+        char* data()                    { return data_; }
+        char* data_from_last_seek()     { return &data_[seek_index_]; }
+        size_t written_size_from_seek() { return end_ - seek_index_; }
+        size_t writable_size()          { return size_ - end_; }
+        size_t written_size()           { return end_ - begin_; }
+
         void write(const char* data, size_t size) {
             if (end_ - size <= 0) {
                 size_ *= 2;

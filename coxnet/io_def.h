@@ -59,7 +59,7 @@ namespace coxnet {
         } else if (errno == WSAEINTR) {
             return ErrorOperationState::kContinue;
         } else {
-            return ErrorOperationState::ReturnWithClose;
+            return ErrorOperationState::kReturnWithClose;
         }
 #endif // _WIN32
 

@@ -1,5 +1,5 @@
-#ifndef POLLER_H
-#define POLLER_H
+#ifndef POLLER_WINDOWS_H
+#define POLLER_WINDOWS_H
 
 #ifdef _WIN32
 
@@ -298,7 +298,7 @@ namespace coxnet {
             conn->read_buff_->clear();
 
             conn->wsa_buf_.buf = conn->read_buff_->data();
-            conn->wsa_buf_.len = conn->read_buff_->original_size();
+            conn->wsa_buf_.len = conn->read_buff_->writable_size();
             memset(&conn->wsovl_, 0, sizeof(conn->wsovl_));
 
             DWORD   recv_bytes        = 0;
