@@ -5,6 +5,7 @@
 
 #include "io_def.h"
 #include "socket.h"
+#include "cleaner.h"
 
 #include <utility>
 #include <functional>
@@ -20,21 +21,20 @@ namespace coxnet {
 
         if (err_code == ERROR_SUCCESS) {
             if (transferred_bytes <= 0) {
-                socket->err_ = static_cast<int>(SocketErr::kAlreadyDisconnected);
+                // 104 is ECONNRESET in linux, it's mean of connection reset by peer
+                err_code = 104;
             }
-        } else {
-            socket->err_ = static_cast<int>(err_code);
         }
 
-        if (socket->err_ != 0) {
-            socket->_close_handle();
+        if (err_code != 0) {
+            socket->_close_handle((int)err_code);
         }
 
         socket->io_completed_ = true;
         socket->read_buff_->_add_written_from_io(transferred_bytes);
     }
 
-    class Poller {
+    class Poller : public Cleaner {
     public:
         Poller() = default;
         ~Poller() = default;
@@ -68,7 +68,7 @@ namespace coxnet {
 
             int result = ::connect(sock_handle, reinterpret_cast<sockaddr*>(&remote_addr), sizeof(sockaddr_in));
             if (result == SOCKET_ERROR) {
-                if (::WSAGetLastError() == WSAEWOULDBLOCK) {
+                if (get_last_error() == WSAEWOULDBLOCK) {
                     // TODO: async operation is in progress, ignore this error code
                 } else {
                     return nullptr;
@@ -97,17 +97,12 @@ namespace coxnet {
                 return nullptr;
             }
 
-            auto* socket = new Socket(sock_handle);
-            connections_.emplace(socket->native_handle(), socket);
-            if (on_data != nullptr) {
-                on_data_ = std::move(on_data);
-            }
-
-            if (on_close != nullptr) {
-                on_close_ = std::move(on_close);
-            }
-
+            auto* socket = new Socket(sock_handle, static_cast<Cleaner*>(this));
             socket->_set_remote_addr(address, port);
+            conns_.emplace(socket->native_handle(), socket);
+
+            on_data_ = std::move(on_data);
+            on_close_ = std::move(on_close);
 
             // IMPORTANT: trigger first io
             socket->io_completed_ = true;
@@ -153,18 +148,9 @@ namespace coxnet {
             }
 
             sock_listener_  = new listener(sock);
-
-            if (on_connection != nullptr) {
-                on_connection_ = std::move(on_connection);
-            }
-
-            if (on_data != nullptr) {
-                on_data_ = std::move(on_data);
-            }
-
-            if (on_close != nullptr) {
-                on_close_ = std::move(on_close);
-            }
+            on_connection_  = std::move(on_connection);
+            on_data_        = std::move(on_data);
+            on_close_       = std::move(on_close);
 
             return true;
         }
@@ -174,68 +160,37 @@ namespace coxnet {
                 return;
             }
 
-            static bool need_clean      = false;
-            static int  poll_count      = 0;
-            static int  clean_interval  = 1000;
-
             _wait_new_connection();
-            
-            if (++poll_count % clean_interval == 0) {
-                if (!connections_.empty()) {
-                    need_clean = true;
-                }
+
+            for (auto kv : conns_) {
+                _try_read(kv.second);
+                _try_write_async(kv.second);
             }
-
-            auto iter = connections_.begin();
-            while (iter != connections_.end()) {
-                Socket* socket = iter->second;
-                _read_and_recv(socket);
-                _write_async(socket);
-
-                ++iter;
-                if (!need_clean) {
-                    continue;
-                }
-
-                if (socket->err_ != 0 || socket->user_closed_) {
-                    if (on_close_ != nullptr && socket->io_completed_) {
-                        on_close_(socket, socket->user_closed_ ? 0 : socket->err_);
-                        Socket::_safe_delete(socket);
-                    }
-
-                    connections_.erase(socket->native_handle());
-                }
-            }
-
-            need_clean = false;
         }
+
         // sync function
         void shut() {
-            if (sock_listener_ != nullptr) {
-                sock_listener_->_close_handle();
-            }
-
-            for (auto kv : connections_) {
+            for (auto kv : conns_) {
                 kv.second->_close_handle();
             }
 
+            if (sock_listener_ != nullptr) {
+                sock_listener_->_close_handle();
+            }
             // sleep 100ms, wait io
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
             // waiting for io complete
-            for (auto& kv : connections_) {
-                while (true) {
-                    if (kv.second->io_completed_) {
-                        Socket::_safe_delete(kv.second);
-                        break;
-                    }
-                }
+            for (auto kv : conns_) {
+                delete kv.second;
             }
+            conns_.clear();
+            Cleaner::clean_handles_.clear();
 
-            connections_.clear();
-
-            delete sock_listener_;
-            sock_listener_ = nullptr;
+            if (sock_listener_ != nullptr) {
+                delete sock_listener_;
+                sock_listener_ = nullptr;
+            }
 
             on_connection_  = nullptr;
             on_data_        = nullptr;
@@ -244,7 +199,7 @@ namespace coxnet {
         }
     private:
         int _wait_new_connection() {
-            socket_t        socket      = invalid_socket;
+            socket_t        handle      = invalid_socket;
             sockaddr_in     remote_addr = {};
             int             addr_len    = sizeof(sockaddr_in);
             int             event_count = 0;
@@ -252,76 +207,76 @@ namespace coxnet {
             while (sock_listener_ != nullptr && sock_listener_->is_valid()) {
                 memset(&remote_addr, 0, sizeof(sockaddr_in));
 
-                socket = ::accept(sock_listener_->native_handle(), reinterpret_cast<sockaddr*>(&remote_addr), &addr_len);
-                if (socket == invalid_socket) {
+                handle = ::accept(sock_listener_->native_handle(), reinterpret_cast<sockaddr*>(&remote_addr), &addr_len);
+                if (handle == invalid_socket) {
                     break;
                 }
 
                 event_count++;
 
-                if (!Socket::_set_non_blocking(socket)) {
+                if (!Socket::_set_non_blocking(handle)) {
                     continue;
                 }
 
-                if (!::BindIoCompletionCallback(reinterpret_cast<HANDLE>(socket), IOCompletionCallBack, 0)) {
-                    closesocket(socket);
+                if (!::BindIoCompletionCallback(reinterpret_cast<HANDLE>(handle), IOCompletionCallBack, 0)) {
+                    closesocket(handle);
                     continue;
                 }
 
-                auto* conn = new Socket(socket);
+                auto* socket = new Socket(handle, static_cast<Cleaner*>(this));
                 char ipv4_addr_str[16] = { 0 };
                 inet_ntop(AF_INET, &remote_addr.sin_addr, ipv4_addr_str, sizeof(ipv4_addr_str));
-                conn->_set_remote_addr(ipv4_addr_str, ntohs(remote_addr.sin_port));
+                socket->_set_remote_addr(ipv4_addr_str, ntohs(remote_addr.sin_port));
 
-                connections_.emplace(conn->native_handle(), conn);
+                conns_.emplace(socket->native_handle(), socket);
                 if (on_connection_ != nullptr) {
-                    on_connection_(conn);
+                    on_connection_(socket);
                 }
 
                 // IMPORTANT: trigger first io
-                conn->io_completed_ = true;
+                socket->io_completed_ = true;
             }
 
             return event_count;
         }
 
-        void _read_and_recv(Socket* conn) {
-            if (!conn->io_completed_) {
+        void _try_read(Socket* socket) {
+            if (!socket->io_completed_) {
                 return;
             }
 
-            if (conn->read_buff_->written_size() > 0 && on_data_ != nullptr) {
-                on_data_(conn, conn->read_buff_->data(), conn->read_buff_->written_size());
+            if (socket->read_buff_->written_size() > 0 && on_data_ != nullptr) {
+                on_data_(socket, socket->read_buff_->data(), socket->read_buff_->written_size());
             }
 
-            conn->io_completed_ = false;
-            conn->read_buff_->clear();
+            socket->io_completed_ = false;
+            socket->read_buff_->clear();
 
-            conn->wsa_buf_.buf = conn->read_buff_->data();
-            conn->wsa_buf_.len = conn->read_buff_->writable_size();
-            memset(&conn->wsovl_, 0, sizeof(conn->wsovl_));
+            socket->wsa_buf_.buf = socket->read_buff_->data();
+            socket->wsa_buf_.len = socket->read_buff_->writable_size();
+            memset(&socket->wsovl_, 0, sizeof(socket->wsovl_));
 
             DWORD   recv_bytes        = 0;
             DWORD   flags             = 0;
-            int result =::WSARecv(conn->native_handle(), &conn->wsa_buf_, 1, &recv_bytes, &flags, &conn->wsovl_, NULL);
+            int result =::WSARecv(socket->native_handle(), &socket->wsa_buf_, 1, &recv_bytes, &flags, &socket->wsovl_, NULL);
             if (result == SOCKET_ERROR) {
-                if (int err = ::WSAGetLastError(); err != WSA_IO_PENDING) {
-                    conn->err_ = err;
-                    conn->_close_handle();
+                if (int err = get_last_error(); err != WSA_IO_PENDING) {
+                    socket->_close_handle(err);
                 }
             }
         }
 
-        void _write_async(Socket* socket) {
+        void _try_write_async(Socket* socket) {
             socket->_try_write_when_io_event_coming();
         }
     private:
         listener*                               sock_listener_  = nullptr;
-        std::unordered_map<socket_t, Socket*>   connections_    = {};
+        std::unordered_map<socket_t, Socket*>   conns_    = {};
 
         ConnectionCallback                      on_connection_  = nullptr;
         DataCallback                            on_data_        = nullptr;
         CloseCallback                           on_close_       = nullptr;
+        ListenErrorCallback                     on_listen_err_      = nullptr;
     };
 }
 

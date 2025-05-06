@@ -76,17 +76,15 @@ namespace coxnet {
                 return nullptr;
             }
             
-            auto socket = new Socket(sock_handle);
-            socket->_set_remote_addr(address, port);
-
             epoll_event ev { .events = EPOLLIN | EPOLLET, .data.ptr = socket };
             int result = epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, sock_handle, &ev);
             if (result != 0) {
-                socket->_close_handle(get_last_error());
-                delete socket;
+                close(sock_handle);
                 return nullptr;
             }
 
+            auto socket = new Socket(sock_handle, static_cast<Cleaner*>(this));
+            socket->_set_remote_addr(address, port);
             conns_.emplace(socket->native_handle(), socket);
             
             on_data_    = std::move(on_data);
@@ -195,7 +193,7 @@ namespace coxnet {
                 }
 
                 if (socket->_is_listener()) {
-                    if (_wait_new_connection() == -1) {
+                    if (_wait_new_connection() != 0) {
                         if (on_listen_err_ != nullptr) {
                             on_listen_err_(sock_listener_->err_);
                         }
@@ -210,12 +208,12 @@ namespace coxnet {
         }
 
         void shut() {
-            if (sock_listener_ != nullptr) {
-                sock_listener_->_close_handle();
-            }
-
             for (auto kv : conns_) {
                 kv.second->_close_handle();
+            }
+
+            if (sock_listener_ != nullptr) {
+                sock_listener_->_close_handle();
             }
 
             // sleep 100ms, wait io event
@@ -260,6 +258,10 @@ namespace coxnet {
                     delete socket;
                 }
             }
+
+            if (Cleaner::clean_handles_.size() != 0) {
+                Cleaner::clean_handles_.clear();
+            }
         }
 
         int _wait_new_connection() {
@@ -271,8 +273,8 @@ namespace coxnet {
             sockaddr_in remote_addr     = { 0 };
             socklen_t   addr_len        = sizeof(remote_addr);
             
-            int fd = accept(sock_listener_->native_handle(), (struct sockaddr*)(&remote_addr), &addr_len);
-            if (fd == -1) {
+            int handle = accept(sock_listener_->native_handle(), (struct sockaddr*)(&remote_addr), &addr_len);
+            if (handle == -1) {
                 if (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK) {
                     return 0;
                 }
@@ -282,15 +284,17 @@ namespace coxnet {
                 return -1;
             }
 
-            Socket::_set_non_blocking(fd);
+            if(!Socket::_set_non_blocking(handle)) {
+                return get_last_error();
+            }
 
-            auto conn = new Socket(fd, static_cast<Cleaner*>(this));
+            auto conn = new Socket(handle, static_cast<Cleaner*>(this));
             char ipv4_addr_str[16] = { 0 };
             inet_ntop(AF_INET, &remote_addr.sin_addr, ipv4_addr_str, sizeof(ipv4_addr_str));
             conn->_set_remote_addr(ipv4_addr_str, ntohs(remote_addr.sin_port));
 
             epoll_event ev { .events = EPOLLIN | EPOLLET, .data.ptr = conn };
-            epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, fd, &ev);
+            epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, handle, &ev);
             
             conns_.emplace(conn->native_handle(), conn);
             
@@ -332,19 +336,18 @@ namespace coxnet {
                     }
                 }  
             }
-
-            conn->read_buff_->clear();
         }
     private:
         listener*                               sock_listener_      = nullptr;
+
         int                                     epoll_fd_           = -1;
         epoll_event*                            epoll_events_       = nullptr;
+
         std::unordered_map<socket_t, Socket*>   conns_              = {};
-        std::set<socket_t>                      delay_cleaup_conns_ = {};
+
         ConnectionCallback                      on_connection_      = nullptr;
         DataCallback                            on_data_            = nullptr;
         CloseCallback                           on_close_           = nullptr;
-
         ListenErrorCallback                     on_listen_err_      = nullptr;
     };
 }

@@ -3,6 +3,7 @@
 
 #include "io_def.h"
 #include "cleaner.h"
+#include "buffer.h"
 
 #include <tuple>
 #include <functional>
@@ -11,7 +12,6 @@
 
 namespace coxnet {
     class Poller;
-    class SimpleBuffer;
     class Socket;
     using ConnectionCallback    = std::function<void (Socket* conn_socket)>;
     using CloseCallback         = std::function<void (Socket* conn_socket, int err)>;
@@ -80,15 +80,14 @@ namespace coxnet {
                     total_sent += sent_n;
                 } else {
                     int err_code = get_last_error();
-                    ErrorOption state = adjust_io_error_option(err_code);
-                    if (state == ErrorOption::kNext) {
+                    if (adjust_io_error_option(err_code) == ErrorOption::kNext) {
                         write_buff_->write(data + total_sent, data_len - total_sent);
 #if defined(__linux__)
                         epoll_event ev { .events = EPOLLIN | EPOLLOUT | EPOLLET, .data.ptr = this };
                         epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, sock_, &ev);
 #endif // __linux__
                         break;
-                    } else if (state == ErrorOption::kContinue) {
+                    } else if (adjust_io_error_option(err_code) == ErrorOption::kContinue) {
                         continue;
                     } else {
                         _close_handle(err_code);
@@ -114,14 +113,13 @@ namespace coxnet {
                     write_buff_->seek(sent_n);
                 } else {
                     int err_code = get_last_error();
-                    ErrorOption state = adjust_io_error_option(err_code);
-                    if (state == ErrorOption::kNext) {
+                    if (adjust_io_error_option(err_code) == ErrorOption::kNext) {
 #if defined(__linux__)
                         epoll_event ev { .events = EPOLLIN | EPOLLOUT | EPOLLET, .data.ptr = this };
                         epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, sock_, &ev);
 #endif // __linux__
                         break;
-                    } else if (state == ErrorOption::kContinue) {
+                    } else if (adjust_io_error_option(err_code) == ErrorOption::kContinue) {
                         continue;
                     } else {
                         _close_handle(err_code);
@@ -178,7 +176,7 @@ namespace coxnet {
 #endif
         }
 
-        void _set_remote_addr(const char* addr, int port) {
+        void _set_remote_addr(const char* addr, uint32_t port) {
             memcpy(remote_addr_, addr, 16);
             remote_port_ = port;
         }
@@ -192,7 +190,7 @@ namespace coxnet {
         void*           user_data_          = nullptr;
 
         char            remote_addr_[16]    = { 0 };
-        int             remote_port_        = 0;
+        uint32_t        remote_port_        = 0;
 
         SimpleBuffer*   read_buff_          = nullptr;
         SimpleBuffer*   write_buff_         = nullptr;

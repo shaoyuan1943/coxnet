@@ -29,12 +29,6 @@
 #include <regex>
 
 namespace coxnet {
-    enum class SocketErr {
-        kSucceed,
-        kAlreadyDisconnected,
-        kTimeout
-    };
-
 #ifdef _WIN32
     using socket_t = SOCKET;
     static constexpr socket_t invalid_socket = INVALID_SOCKET;
@@ -57,12 +51,7 @@ namespace coxnet {
         return 0;
     }
 
-    enum class ErrorOption {
-        kNext,
-        kContinue,
-        kClose
-    };
-
+    enum class ErrorOption { kNext, kContinue, kClose };
     ErrorOption adjust_io_error_option(int err) {
 #if defined(_WIN32)
         switch(err) {
@@ -116,11 +105,7 @@ namespace coxnet {
         return IPType::kInvalid;
     }
 
-    enum class SocketStackMode {
-        kOnlyIPv4,
-        kOnlyIPv6,
-        kIPv4IPv6,
-    };
+    enum class SocketStackMode { kOnlyIPv4, kOnlyIPv6, kIPv4IPv6 };
 } // namespace coxcp
 
 #endif //IO_DEF_H

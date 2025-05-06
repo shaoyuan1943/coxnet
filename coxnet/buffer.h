@@ -3,8 +3,6 @@
 
 #include "io_def.h"
 
-#include <vector>
-
 namespace coxnet {
     class Poller;
     struct SimpleBuffer {
