@@ -5,16 +5,18 @@
 
 #include "io_def.h"
 #include "socket.h"
+#include "cleaner.h"
 
 #include <cassert>
 #include <thread>
 #include <chrono>
+#include <set>
 
 namespace coxnet {
-    class Poller {
+    class Poller : public Cleaner {
     public:
         Poller() = default;
-        ~Poller() = default;
+        ~Poller() { shut(); }
 
         Poller(const Poller&) = delete;
         Poller& operator=(const Poller&) = delete;
@@ -75,13 +77,13 @@ namespace coxnet {
             }
             
             auto socket = new Socket(sock_handle);
-            conns_.emplace(sock_handle, socket);
             socket->_set_remote_addr(address, port);
 
             epoll_event ev { .events = EPOLLIN | EPOLLET, .data.ptr = socket };
             int result = epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, sock_handle, &ev);
             if (result != 0) {
-                Socket::_safe_delete(socket);
+                socket->_close_handle(get_last_error());
+                delete socket;
                 return nullptr;
             }
 
@@ -99,7 +101,7 @@ namespace coxnet {
                 return false;
             }
 
-            sockaddr_in local_addr = {};
+            sockaddr_in local_addr      = { 0 };
             local_addr.sin_family       = AF_INET;
             local_addr.sin_port         = htons(port);
             if (inet_pton(AF_INET, address, &local_addr.sin_addr) <= 0) {
@@ -155,24 +157,36 @@ namespace coxnet {
                 epoll_event* ev = &epoll_events_[i];
                 Socket* socket = static_cast<Socket*>(ev->data.ptr);
                 
-                assert(socket);
+                // Fatal error
+                if (socket == nullptr) {
+                    shut();
+                    return -1;
+                }
 
-                // if enable to write data, do it first whatever this socket has error
+                // If enable to write data, do it first whatever this socket has error
                 if (ev->events & EPOLLOUT) {
                     socket->_try_write_when_io_event_coming();
                 }
 
-                // when EPOLLHUP happend, read data first and then deal this error
+                // When EPOLLHUP happend, read data first and then deal this error
                 if ((ev->events & EPOLLIN) || (ev->events & EPOLLHUP)) {
-                    _try_read_and_recv(socket);
+                    _try_read(socket);
                     continue;
                 }
-
-                if ((ev->events & EPOLLERR) || (ev->events & EPOLLHUP)) {
-                    int err = 0;
-                    socklen_t err_len = sizeof(err);
-                    getsockopt(socket->native_handle(), SOL_SOCKET, SO_ERROR, &err, &err_len);
-                    socket->_close_handle(err);
+                
+                // Global errno is valid only system call failed.
+                // But in poll funciton, system call epoll_wait is succeed.
+                // So EPOLLERR and EPOLLHUP must use getsockopt(SO_ERROR optional) to get error code. 
+                if (ev->events & EPOLLERR) {
+                    int         err_code    = 0;
+                    socklen_t   err_len     = sizeof(err_code);
+                    getsockopt(socket->native_handle(), SOL_SOCKET, SO_ERROR, &err_code, &err_len);
+                    socket->_close_handle(err_code);
+                    continue;
+                }
+                
+                if ((ev->events & EPOLLHUP)) {
+                    socket->_close_handle();
                     continue;
                 }
 
@@ -191,34 +205,7 @@ namespace coxnet {
                 }
             }
 
-            static bool need_clean      = false;
-            static int  poll_count      = 0;
-            static int  clean_interval  = 1000;
-            
-            if (++poll_count % clean_interval == 0) {
-                if (!conns_.empty()) {
-                    need_clean = true;
-                }
-            }
-
-            if (need_clean) {
-                auto iter = conns_.begin();
-                while (iter != conns_.end()) {
-                    auto socket = iter->second;
-                    ++iter;
-
-                    if (socket->err_ != 0 || socket->user_closed_) {
-                        if (on_close_ != nullptr) {
-                            on_close_(socket, socket->user_closed_ ? 0 : socket->err_);
-                        }
-
-                        conns_.erase(iter);
-                        Socket::_safe_delete(socket);
-                    }
-                }
-            }
-
-            need_clean = false;
+            _cleanup();
             return 0;
         }
 
@@ -231,38 +218,58 @@ namespace coxnet {
                 kv.second->_close_handle();
             }
 
-            // sleep 100ms, wait io
+            // sleep 100ms, wait io event
             std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
             for (auto kv : conns_) {
-                Socket::_safe_delete(kv.second);
+                delete kv.second;
             }
             conns_.clear();
+            Cleaner::clean_handles_.clear();
             
             if (epoll_fd_ != -1) {
                 close(epoll_fd_);
                 epoll_fd_ = -1;
             }
 
-            delete[] epoll_events_;
-            epoll_events_ = nullptr;
+            if (epoll_events_ != nullptr) {
+                delete[] epoll_events_;
+                epoll_events_ = nullptr;
+            }
 
-            delete sock_listener_;
-            sock_listener_ = nullptr;
-
+            if (sock_listener_ != nullptr) {
+                delete sock_listener_;
+                sock_listener_ = nullptr;
+            }
+            
             on_connection_  = nullptr;
             on_data_        = nullptr;
             on_close_       = nullptr;
         }
     private:
+        void _cleanup() {
+            for (socket_t handle : Cleaner::clean_handles_) {
+                auto finder = conns_.find(handle);
+                if (finder != conns_.end()) {
+                    auto socket = finder->second;
+                    if (on_close_ != nullptr) {
+                        on_close_(socket, socket->user_closed_ ? 0 : socket->err_);
+                    }
+
+                    conns_.erase(finder);
+                    delete socket;
+                }
+            }
+        }
+
         int _wait_new_connection() {
             int result = -1;
             if (sock_listener_ == nullptr || !sock_listener_->is_valid()) {
                 return result;
             }
 
-            sockaddr_in remote_addr { 0 };
-            socklen_t addr_len = sizeof(remote_addr);
+            sockaddr_in remote_addr     = { 0 };
+            socklen_t   addr_len        = sizeof(remote_addr);
             
             int fd = accept(sock_listener_->native_handle(), (struct sockaddr*)(&remote_addr), &addr_len);
             if (fd == -1) {
@@ -277,13 +284,14 @@ namespace coxnet {
 
             Socket::_set_non_blocking(fd);
 
-            auto conn = new Socket(fd);
+            auto conn = new Socket(fd, static_cast<Cleaner*>(this));
             char ipv4_addr_str[16] = { 0 };
             inet_ntop(AF_INET, &remote_addr.sin_addr, ipv4_addr_str, sizeof(ipv4_addr_str));
             conn->_set_remote_addr(ipv4_addr_str, ntohs(remote_addr.sin_port));
 
             epoll_event ev { .events = EPOLLIN | EPOLLET, .data.ptr = conn };
             epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, fd, &ev);
+            
             conns_.emplace(conn->native_handle(), conn);
             
             if (on_connection_ != nullptr) {
@@ -293,36 +301,33 @@ namespace coxnet {
             return 0;
         }
 
-        void _try_read_and_recv(Socket* conn) {
-            if (!conn->is_valid()) {
-                return;
-            }
-
+        void _try_read(Socket* conn) {
             auto    conn_fd         = conn->native_handle();
-            int     result          = -1;
-            size_t  readed_size     = 0;
+            int     read_n          = -1;
+            size_t  readed_total    = 0;
 
             while (true) {
                 auto data           = conn->read_buff_->data();
-                result = recv(conn->native_handle(), data, conn->read_buff_->writable_size(), 0);
-                if (result > 0) {
-                    readed_size += result;
-                    conn->read_buff_->_add_written_from_io(result);
+                read_n = recv(conn->native_handle(), data, conn->read_buff_->writable_size(), 0);
+                if (read_n > 0) {
+                    readed_total += read_n;
+                    conn->read_buff_->_add_written_from_io(read_n);
                     if (on_data_ != nullptr) {
                         on_data_(conn, conn->read_buff_->data(), conn->read_buff_->writable_size());
                     }
                     conn->read_buff_->clear();
                     continue;
-                } else if (result == 0) {
-                    conn->_close_handle(errno);
+                } else if (read_n == 0) {
+                    conn->_close_handle(get_last_error());
                     break;
                 } else {
-                    if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                    int err_code = get_last_error();
+                    if (adjust_io_error_option(err_code) == ErrorOption::kNext) {
                         break;
-                    } else if (errno == EINTR) {
+                    } else if (adjust_io_error_option(err_code) == ErrorOption::kContinue) {
                         continue;
                     } else {
-                        conn->_close_handle(errno);
+                        conn->_close_handle(err_code);
                         break;
                     }
                 }  
@@ -331,16 +336,16 @@ namespace coxnet {
             conn->read_buff_->clear();
         }
     private:
-        listener*                               sock_listener_  = nullptr;
-        int                                     epoll_fd_       = -1;
-        epoll_event*                            epoll_events_   = nullptr;
-        std::unordered_map<socket_t, Socket*>   conns_          = {};
+        listener*                               sock_listener_      = nullptr;
+        int                                     epoll_fd_           = -1;
+        epoll_event*                            epoll_events_       = nullptr;
+        std::unordered_map<socket_t, Socket*>   conns_              = {};
+        std::set<socket_t>                      delay_cleaup_conns_ = {};
+        ConnectionCallback                      on_connection_      = nullptr;
+        DataCallback                            on_data_            = nullptr;
+        CloseCallback                           on_close_           = nullptr;
 
-        ConnectionCallback                      on_connection_  = nullptr;
-        DataCallback                            on_data_        = nullptr;
-        CloseCallback                           on_close_       = nullptr;
-
-        ListenErrorCallback                     on_listen_err_  = nullptr;
+        ListenErrorCallback                     on_listen_err_      = nullptr;
     };
 }
 

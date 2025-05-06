@@ -1,12 +1,13 @@
 #ifndef SOCKET_H
 #define SOCKET_H
 
+#include "io_def.h"
+#include "cleaner.h"
+
 #include <tuple>
 #include <functional>
 #include <utility>
 #include <algorithm>
-
-#include "io_def.h"
 
 namespace coxnet {
     class Poller;
@@ -20,15 +21,29 @@ namespace coxnet {
     class Socket {
     public:
         friend class Poller;
-        explicit Socket(socket_t sock) {
+        explicit Socket(socket_t sock, Cleaner* cleaner = nullptr) {
             sock_ = sock;
             if (!Socket::_is_listener()) {
                 read_buff_  = new SimpleBuffer(max_read_buff_size);
                 write_buff_ = new SimpleBuffer(max_write_buff_size);
             }
-        }
 
-        virtual ~Socket() {}
+            cleaner_ = cleaner;
+        }
+        
+        virtual ~Socket() {
+            if (!Socket::_is_listener()) {
+                if (read_buff_ != nullptr) {
+                    delete read_buff_;
+                    read_buff_ = nullptr;
+                }
+                
+                if (write_buff_ != nullptr) {
+                    delete write_buff_;
+                    write_buff_ = nullptr;
+                }
+            }
+        }
 
         Socket(const Socket&) = delete;
         Socket& operator=(const Socket&) = delete;
@@ -40,7 +55,7 @@ namespace coxnet {
 
         void user_close() {
             user_closed_ = true;
-            _close_handle();
+            _close_handle(0);
         }
 
         std::tuple<char*, int> remote_addr() { return std::make_tuple(remote_addr_, remote_port_); }
@@ -51,9 +66,9 @@ namespace coxnet {
                 return result;
             }
 
-            if (write_buff_->written_size_from_seek() > 0) {
+            if (write_buff_->written_size_from_seeker() > 0) {
                 write_buff_->write(data, len);
-                return len;
+                return (int)len;
             }
 
             size_t total_sent   = 0;
@@ -64,18 +79,19 @@ namespace coxnet {
                 if (sent_n > 0) {
                     total_sent += sent_n;
                 } else {
-                    ErrorOperationState state = adjust_io_operation_error_state();
-                    if (state == ErrorOperationState::kSaveResidue) {
+                    int err_code = get_last_error();
+                    ErrorOption state = adjust_io_error_option(err_code);
+                    if (state == ErrorOption::kNext) {
                         write_buff_->write(data + total_sent, data_len - total_sent);
 #if defined(__linux__)
                         epoll_event ev { .events = EPOLLIN | EPOLLOUT | EPOLLET, .data.ptr = this };
                         epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, sock_, &ev);
 #endif // __linux__
                         break;
-                    } else if (state == ErrorOperationState::kContinue) {
+                    } else if (state == ErrorOption::kContinue) {
                         continue;
                     } else {
-                        _close_handle(errno);
+                        _close_handle(err_code);
                         return -1;
                     }
                 }
@@ -85,37 +101,30 @@ namespace coxnet {
         }
     private:
         size_t _try_write_when_io_event_coming() {
-            if (write_buff_->written_size_from_seek() <= 0) {
+            if (write_buff_->written_size_from_seeker() <= 0) {
                 return 0;
             }
             
             size_t total_sent   = 0;
-            size_t data_len     = write_buff_->written_size_from_seek();
+            size_t data_len     = write_buff_->written_size_from_seeker();
             while (total_sent < data_len) {
-                int sent_n = ::send(native_handle(), write_buff_->data_from_last_seek(), write_buff_->written_size_from_seek(), 0);
+                int sent_n = ::send(native_handle(), write_buff_->data_from_last_seek(), write_buff_->written_size_from_seeker(), 0);
                 if (sent_n > 0) {
                     total_sent += sent_n;
                     write_buff_->seek(sent_n);
                 } else {
-                    ErrorOperationState state = adjust_io_operation_error_state();
-                    if (state == ErrorOperationState::kSaveResidue) {
+                    int err_code = get_last_error();
+                    ErrorOption state = adjust_io_error_option(err_code);
+                    if (state == ErrorOption::kNext) {
 #if defined(__linux__)
                         epoll_event ev { .events = EPOLLIN | EPOLLOUT | EPOLLET, .data.ptr = this };
                         epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, sock_, &ev);
 #endif // __linux__
                         break;
-                    } else if (state == ErrorOperationState::kContinue) {
+                    } else if (state == ErrorOption::kContinue) {
                         continue;
                     } else {
-                        int err = 0;
-#if defined(_WIN32)
-                        err = ::WSAGetLastError();
-#endif // _WIN32
-
-#if defined(__linux__)
-                        err = errno;
-#endif // __linux__
-                        _close_handle(err);
+                        _close_handle(err_code);
                         return -1;
                     }
                 }
@@ -147,6 +156,10 @@ namespace coxnet {
 
             sock_   = invalid_socket;
             err_    = err;
+
+            if (cleaner_ != nullptr) {
+                cleaner_->push_handle(sock_);
+            }
         }
 
         virtual bool _is_listener() { return false; }
@@ -168,14 +181,6 @@ namespace coxnet {
         void _set_remote_addr(const char* addr, int port) {
             memcpy(remote_addr_, addr, 16);
             remote_port_ = port;
-        }
-
-        static void _safe_delete(Socket* socket) {
-            if (socket != nullptr) {
-                delete socket->read_buff_;
-                delete socket->write_buff_;
-                delete socket;
-            }
         }
 
 #ifdef _WIN32
@@ -203,6 +208,7 @@ namespace coxnet {
 #if defined(__linux__)
         int             epoll_fd_           = 0;
 #endif // __linux__
+        Cleaner*        cleaner_            = nullptr;
     };
 
     class listener : public Socket {

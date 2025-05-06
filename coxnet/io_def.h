@@ -45,31 +45,44 @@ namespace coxnet {
     static constexpr int SOCKET_ERROR = -1;
 #endif // _WIN32
 
-    enum class ErrorOperationState {
-        kSaveResidue,
+    int get_last_error() {
+#if defined(__linux__)
+        return errno;
+#endif // __linux__
+
+#if defined(_WIN32)
+        return (int)::WSAGetLastError();
+#endif // _WIN32
+        
+        return 0;
+    }
+
+    enum class ErrorOption {
+        kNext,
         kContinue,
-        kReturnWithClose
+        kClose
     };
 
-    ErrorOperationState adjust_io_operation_error_state() {
+    ErrorOption adjust_io_error_option(int err) {
 #if defined(_WIN32)
-        int errno = ::WSAGetLastError();
-        if (errno == WSAEWOULDBLOCK) {
-            return ErrorOperationState::kSaveResidue;
-        } else if (errno == WSAEINTR) {
-            return ErrorOperationState::kContinue;
-        } else {
-            return ErrorOperationState::kReturnWithClose;
+        switch(err) {
+        case WSAEWOULDBLOCK:
+            return ErrorOption::kNext;
+        case WSAEINTR:
+            return ErrorOption::kContinue;
+        default:
+            return ErrorOption::kClose;
         }
 #endif // _WIN32
 
 #if defined(__linux__)
-        if (errno == EAGAIN || errno == EWOULDBLOCK) {
-            return ErrorOperationState::kSaveResidue;
-        } else if (errno == EINTR){
-            return ErrorOperationState::kContinue;
-        } else {
-            return ErrorOperationState::kReturnWithClose;
+        switch(err) {
+        case EAGAIN: // EAGIN == EWOULDBLOCK
+            return ErrorOption::kNext;
+        case EINTR:
+            return ErrorOption::kContinue;
+        default:
+            return ErrorOption::kClose;
         }
 #endif // __linux__
     }
