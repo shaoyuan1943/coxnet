@@ -94,21 +94,21 @@ public:
 
     std::tuple<char*, int> remote_addr() { return std::make_tuple(remote_addr_, remote_port_); }
 
-    int write(const char* data, size_t len) {
+    int write(const char* data, size_t size) {
       if (!is_valid() || user_closed_ || err_ != 0) {
         return -1;
       }
       
       if (write_buff_->written_size_from_seek() > 0) {
-        write_buff_->write(data, len);
-        return static_cast<int>(len);
+        write_buff_->write(data, size);
+        return static_cast<int>(size);
       }
 
-      size_t  total_sent  = 0;
-      size_t  data_len    = len;
+      size_t  total_sent   = 0;
+      size_t  data_size    = size;
 
-      while (total_sent < data_len) {
-        int sent_n = ::send(native_handle(), data + total_sent, data_len - total_sent, 0);
+      while (total_sent < data_size) {
+        int sent_n = ::send(native_handle(), data + total_sent, data_size - total_sent, 0);
         if (sent_n > 0) {
           total_sent += sent_n;
           continue;
@@ -116,7 +116,7 @@ public:
         
         int err_code = get_last_error();
         if (adjust_io_error_option(err_code) == ErrorOption::kNext) {
-          write_buff_->write(data + total_sent, data_len - total_sent);
+          write_buff_->write(data + total_sent, data_size - total_sent);
 #ifdef __linux__
           epoll_event ev{ .events = EPOLLIN | EPOLLOUT | EPOLLET, .data.ptr = this };
           epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, handle_, &ev);
@@ -141,9 +141,9 @@ private:
         return 0;
       }
 
-      size_t total_sent = 0;
-      size_t data_len   = write_buff_->written_size_from_seek();
-      while (total_sent < data_len) {
+      size_t total_sent   = 0;
+      size_t data_size    = write_buff_->written_size_from_seek();
+      while (total_sent < data_size) {
         int sent_n =
             ::send(native_handle(), write_buff_->take_data_from_seek(), write_buff_->written_size_from_seek(), 0);
         if (sent_n > 0) {
@@ -169,7 +169,7 @@ private:
         return -1;
       }
 
-      if (total_sent >= data_len) {
+      if (total_sent >= data_size) {
         write_buff_->clear();
 #ifdef __linux__
         epoll_event ev{ .events = EPOLLIN | EPOLLET, .data.ptr = this };

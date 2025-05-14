@@ -5,13 +5,10 @@
 #include "socket.h"
 
 #include <functional>
-#include <memory>
 #include <thread>
 #include <chrono>
 #include <ranges>
-#include <set>
 #include <unordered_map>
-#include <cassert>
 
 namespace coxnet {
   class IPoller {
