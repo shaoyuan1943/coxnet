@@ -23,7 +23,7 @@ namespace coxnet {
     size_t written_size()               { return end_ - begin_; }
 
     void write(const char* data, size_t size) {
-      if (end_ - size <= 0) {
+      if (writable_size() <= 0) {
         size_       *= 2;
         char* temp  = new char[size_];
         memcpy(temp, data_, end_);

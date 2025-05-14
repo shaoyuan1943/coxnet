@@ -16,25 +16,19 @@
 namespace coxnet {
   class Poller : public IPoller {
 public:
-    Poller() = default;
-    ~Poller() = default;
+    Poller() {
+      epoll_events_ = new epoll_event[max_epoll_event_count];
+      epoll_fd_     = epoll_create1(EPOLL_CLOEXEC);
+      assert(epoll_fd_);
+    }
 
+    ~Poller() = default;
     Poller(const Poller&) = delete;
     Poller& operator=(const Poller&) = delete;
     Poller(Poller&& other) = delete;
     Poller& operator=(Poller&& other) = delete;
 
-    bool setup() {
-      epoll_events_ = new epoll_event[max_epoll_event_count];
-      epoll_fd_ = epoll_create1(EPOLL_CLOEXEC);
-      if (epoll_fd_ == -1) {
-        return false;
-      }
-
-      return true;
-    }
-
-    std::shared_ptr<Socket> connect(const char address[], uint32_t port, DataCallback on_data, 
+    Socket* connect(const char address[], uint32_t port, DataCallback on_data, 
         CloseCallback on_close) override {
       IPType net_type = ip_address_version(std::string(address));
       if (net_type == IPType::kInvalid) {
@@ -76,12 +70,12 @@ public:
         return nullptr;
       }
 
-      auto conn = std::make_shared<Socket>(sock_handle, _cleaner(), epoll_fd_);
-      epoll_event ev{ .events = EPOLLIN | EPOLLET, .data.ptr = conn.get() };
+      auto conn = new Socket(sock_handle, _cleaner(), epoll_fd_);
+      epoll_event ev{ .events = EPOLLIN | EPOLLET, .data.ptr = conn };
       int result = epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, sock_handle, &ev);
       if (result != 0) {
         close(sock_handle);
-        conn.reset();
+        delete conn;
         return nullptr;
       }
 
@@ -151,10 +145,30 @@ public:
 
       return true;
     }
+    
+    void poll() override { _poll(); _cleanup(); }
+    void shut() override {
+      _close_conns();
 
-    int poll() {
+      if (epoll_fd_ != -1) {
+        close(epoll_fd_);
+        epoll_fd_ = -1;
+      }
+
+      if (epoll_events_ != nullptr) {
+        delete[] epoll_events_;
+        epoll_events_ = nullptr;
+      }
+
+      if (sock_listener_ != nullptr) {
+        delete sock_listener_;
+        sock_listener_ = nullptr;
+      }
+    }
+  protected:
+    void _poll() {
       if (epoll_fd_ == -1 || sock_listener_ == nullptr || !sock_listener_->is_valid()) {
-        return -1;
+        return;
       }
 
       int count = epoll_wait(epoll_fd_, epoll_events_, max_epoll_event_count, 0);
@@ -162,11 +176,8 @@ public:
         epoll_event*  ev    = &epoll_events_[i];
         Socket*       conn  = static_cast<Socket*>(ev->data.ptr);
 
-        // Fatal error
-        if (conn == nullptr) {
-          shut();
-          return -1;
-        }
+        // Fatal error if conn is nil
+        assert(conn);
 
         // If enable to write data, do it first whatever this socket has error
         if (ev->events & EPOLLOUT) {
@@ -207,8 +218,6 @@ public:
           continue;
         }
       }
-
-      return 0;
     }
   private:
     void _wait_new_connection() {
@@ -285,6 +294,9 @@ public:
         break;
       }
     }
+  private:
+    int                 epoll_fd_       = -1;
+    epoll_event*        epoll_events_   = nullptr;
   };
 } // namespace coxnet
 

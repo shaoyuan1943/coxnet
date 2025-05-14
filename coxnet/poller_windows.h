@@ -43,7 +43,8 @@ namespace coxnet {
     Poller(Poller&& other) = delete;
     Poller& operator=(Poller&& other) = delete;
 
-    Socket* connect(const char address[], const uint32_t port, DataCallback on_data, CloseCallback on_close) override {
+    Socket* connect(const char address[], const uint32_t port,
+      DataCallback on_data, CloseCallback on_close) override {
       IPType net_type = ip_address_version(std::string(address));
       if (net_type == IPType::kInvalid) {
         return nullptr;
@@ -102,7 +103,8 @@ namespace coxnet {
       return conn;
     }
 
-    bool listen(const char address[], const uint32_t port, ConnectionCallback on_connection, DataCallback on_data,
+    bool listen(const char address[], const uint32_t port,
+      ConnectionCallback on_connection, DataCallback on_data,
         CloseCallback on_close) override {
       const IPType net_type = ip_address_version(std::string(address));
       if (net_type == IPType::kInvalid) {
@@ -150,7 +152,9 @@ namespace coxnet {
       return true;
     }
 
-    void _poll() override {
+    void poll() override { _poll(); _cleanup(); }
+  protected:
+    void _poll() {
       if (sock_listener_ == nullptr || !sock_listener_->is_valid()) {
         return;
       }
@@ -163,7 +167,7 @@ namespace coxnet {
       }
     }
   private:
-    int _wait_new_connection() {
+    void _wait_new_connection() {
       socket_t    handle        = invalid_socket;
       sockaddr_in remote_addr   = {};
       int         addr_len      = sizeof(sockaddr_in);
@@ -201,8 +205,6 @@ namespace coxnet {
         // IMPORTANT: trigger first io
         conn->io_completed_ = true;
       }
-
-      return event_count;
     }
 
     void _try_read(Socket* conn) {

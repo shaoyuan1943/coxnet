@@ -14,10 +14,16 @@
 namespace coxnet {
   class Cleaner {
   public:
+    Cleaner(std::function<void(socket_t)>&& func) {
+      traverse_func_ = std::move(func);
+    }
+
     void push_handle(socket_t handle) { clean_handles_.emplace(handle); }
-    void traverse(std::function<void(socket_t)>&& func) const {
-      for (const socket_t handle: clean_handles_) {
-        func(handle);
+    void traverse() {
+      if (traverse_func_ != nullptr) {
+        for (const socket_t handle : clean_handles_) {
+          traverse_func_(handle);
+        }
       }
     }
 
@@ -27,7 +33,8 @@ namespace coxnet {
       }
     }
   private:
-    std::set<socket_t> clean_handles_;
+    std::set<socket_t>            clean_handles_;
+    std::function<void(socket_t)> traverse_func_;
   };
 
 #ifdef _WIN32
