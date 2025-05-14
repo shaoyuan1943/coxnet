@@ -12,4 +12,8 @@
 #include "poller_linux.h"
 #endif
 
+#ifdef __APPLE__
+#include "poller_mac.h"
+#endif 
+
 #endif

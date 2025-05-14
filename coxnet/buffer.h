@@ -3,27 +3,74 @@
 
 #include "io_def.h"
 
+#include <cassert>
+
 namespace coxnet {
-  class Poller;
   struct SimpleBuffer {
-  public:
     friend class Poller;
-    SimpleBuffer(size_t initial_capacity = 8192)
+    explicit SimpleBuffer(size_t initial_capacity = 8192)
     : size_(initial_capacity), begin_(0), end_(0), seek_index_(0) {
       data_ = new char[size_];
     }
 
+    SimpleBuffer(const SimpleBuffer&) = delete;
+    SimpleBuffer& operator=(const SimpleBuffer&) = delete;
+
+    SimpleBuffer(SimpleBuffer&& other) noexcept
+    : data_(other.data_), begin_(other.begin_), end_(other.end_),
+      seek_index_(other.seek_index_), size_(other.size_) {
+      other.data_       = nullptr;
+      other.size_       = 0;
+      other.begin_      = 0;
+      other.end_        = 0;
+      other.seek_index_ = 0;
+    }
+
+    SimpleBuffer& operator=(SimpleBuffer&& other) noexcept {
+      if (this != &other) {
+        delete[] data_;
+        data_       = other.data_;
+        begin_      = other.begin_;
+        end_        = other.end_;
+        seek_index_ = other.seek_index_;
+        size_       = other.size_;
+
+        other.data_       = nullptr; // 重要
+        other.size_       = 0;
+        other.begin_      = 0;
+        other.end_        = 0;
+        other.seek_index_ = 0;
+      }
+      return *this;
+    }
+
     ~SimpleBuffer()                     { delete[] data_; }
     void clear()                        { begin_ = end_ = seek_index_ = 0; }
-    void seek(const size_t size)        { seek_index_ += size; }
-    char* data()                        { return data_; }
-    char* data_from_last_seek()         { return &data_[seek_index_]; }
-    size_t written_size_from_seeker()   { return end_ - seek_index_; }
+
     size_t writable_size()              { return size_ - end_; }
     size_t written_size()               { return end_ - begin_; }
+    size_t written_size_from_seek()     { return end_ - seek_index_; }
 
-    void write(const char* data, size_t size) {
-      if (writable_size() <= 0) {
+    char* take_data()                   { return data_; }
+    char* take_data_from_seek()         { return &data_[seek_index_]; }
+    void add_written_from_external_take(const size_t size_written) {
+      assert(end_ + size_written <= size_);
+      end_ += size_written;
+    }
+
+    void seek(const size_t offset) {
+      if (begin_ + offset <= end_) { // Assuming seek is from begin_ or relative to current seek_index
+        seek_index_ = begin_ + offset; // Or seek_index_ += offset; with more checks
+      } else {
+        seek_index_ = end_; // Or throw an error, or handle as per design
+      }
+
+      // Make sure seek_index_ doesn't go before begin_ if that's a constraint
+      if (seek_index_ < begin_) seek_index_ = begin_;
+    }
+
+    void write(const char* data, size_t size_written) {
+      if (writable_size() < size_written) {
         size_       *= 2;
         char* temp  = new char[size_];
         memcpy(temp, data_, end_);
@@ -33,14 +80,12 @@ namespace coxnet {
         delete[] original;
       }
 
-      memcpy(&data_[end_], data, size);
-      end_ += size;
+      memcpy(&data_[end_], data, size_written);
+      end_ += size_written;
     }
 #ifdef _WIN32
     friend void WINAPI IOCompletionCallBack(DWORD, DWORD, LPOVERLAPPED);
 #endif // _WIN32
-  private:
-    void _add_written_from_io(const size_t size) { end_ += size; }
   private:
     char* data_         = nullptr;
     size_t begin_       = 0;

@@ -30,7 +30,7 @@ namespace coxnet {
     }
 
     context->Conn->io_completed_ = true;
-    context->Conn->read_buff_->_add_written_from_io(transferred_bytes);
+    context->Conn->read_buff_->add_written_from_external_take(transferred_bytes);
   }
 
   class Poller final : public IPoller {
@@ -213,7 +213,7 @@ namespace coxnet {
       }
 
       if (conn->read_buff_->written_size() > 0 && on_data_ != nullptr) {
-        on_data_(conn, conn->read_buff_->data(), conn->read_buff_->written_size());
+        on_data_(conn, conn->read_buff_->take_data(), conn->read_buff_->written_size());
       }
 
       conn->io_completed_ = false;

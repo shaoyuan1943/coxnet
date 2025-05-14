@@ -5,13 +5,16 @@
 #include <memory>
 
 #ifdef _WIN32
+
 #include <MSWSock.h>
 #include <WS2tcpip.h>
 #include <WinSock2.h>
 #include <Windows.h>
 #pragma comment(lib, "ws2_32.lib")
 #pragma comment(lib, "Mswsock.lib")
+
 #else
+
 #include <arpa/inet.h>
 #include <fcntl.h>
 #include <netdb.h>
@@ -23,9 +26,12 @@
 
 #ifdef __APPLE__
 #include <sys/event.h>
-#else
+#endif 
+
+#ifdef __linux__
 #include <sys/epoll.h>
 #endif
+
 #endif
 
 #include <regex>

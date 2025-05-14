@@ -15,7 +15,7 @@
 
 namespace coxnet {
   class Poller : public IPoller {
-public:
+  public:
     Poller() {
       epoll_events_ = new epoll_event[max_epoll_event_count];
       epoll_fd_     = epoll_create1(EPOLL_CLOEXEC);

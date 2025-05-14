@@ -98,8 +98,8 @@ public:
       if (!is_valid() || user_closed_ || err_ != 0) {
         return -1;
       }
-
-      if (write_buff_->written_size_from_seeker() > 0) {
+      
+      if (write_buff_->written_size_from_seek() > 0) {
         write_buff_->write(data, len);
         return static_cast<int>(len);
       }
@@ -137,15 +137,15 @@ public:
 
 private:
     size_t _try_write_when_io_event_coming() {
-      if (write_buff_->written_size_from_seeker() <= 0) {
+      if (write_buff_->written_size_from_seek() <= 0) {
         return 0;
       }
 
       size_t total_sent = 0;
-      size_t data_len   = write_buff_->written_size_from_seeker();
+      size_t data_len   = write_buff_->written_size_from_seek();
       while (total_sent < data_len) {
         int sent_n =
-            ::send(native_handle(), write_buff_->data_from_last_seek(), write_buff_->written_size_from_seeker(), 0);
+            ::send(native_handle(), write_buff_->take_data_from_seek(), write_buff_->written_size_from_seek(), 0);
         if (sent_n > 0) {
           total_sent += sent_n;
           write_buff_->seek(sent_n);
@@ -223,7 +223,7 @@ private:
 #ifdef _WIN32
     void _overlapped() {
       memset(&recv_context_for_win_.Overlapped, 0, sizeof(recv_context_for_win_.Overlapped));
-      recv_context_for_win_.Buf.buf = this->read_buff_->data();
+      recv_context_for_win_.Buf.buf = this->read_buff_->take_data();
       recv_context_for_win_.Buf.len = this->read_buff_->writable_size();
       recv_context_for_win_.Conn    = this;
     }
