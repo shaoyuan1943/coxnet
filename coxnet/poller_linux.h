@@ -34,9 +34,9 @@ namespace coxnet {
         return nullptr;
       }
 
-      int               af_family = 0;
-      sockaddr_storage  remote_addr_storage;
-      socklen_t         addr_len;
+      int               af_family           = 0;
+      sockaddr_storage  remote_addr_storage = { 0 };
+      socklen_t         addr_len            = 0;
       memset(&remote_addr_storage, 0, sizeof(remote_addr_storage));
 
       if (net_type == IPType::kIPv4) {
@@ -45,7 +45,7 @@ namespace coxnet {
         remote_addr->sin_family   = af_family;
         remote_addr->sin_port     = htons(port);
         if (inet_pton(af_family, address, &remote_addr->sin_addr) <= 0) {
-          return nullptr; // Invalid address format
+          return nullptr;
         }
 
         addr_len = sizeof(sockaddr_in);
@@ -57,8 +57,9 @@ namespace coxnet {
         remote_addr6->sin6_family   = af_family;
         remote_addr6->sin6_port     = htons(port);
         if (inet_pton(af_family, address, &remote_addr6->sin6_addr) <= 0) {
-          return nullptr; // Invalid address format
+          return nullptr;
         }
+        
         addr_len = sizeof(sockaddr_in6);
       }
 
@@ -95,7 +96,7 @@ namespace coxnet {
       }
 
       auto conn = new Socket(sock_handle, _cleaner(), epoll_fd_);
-      epoll_event ev{ .events = EPOLLIN | EPOLLET, .data.ptr = conn };
+      epoll_event ev{ .events = EPOLLIN | EPOLLET | EPOLLHUP, .data.ptr = conn };
       int result = epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, sock_handle, &ev);
       if (result != 0) {
         ::close(sock_handle);
@@ -142,16 +143,12 @@ namespace coxnet {
       } else if (net_type == IPType::kIPv6) {
         if (stack == SocketStack::kOnlyIPv4) { return false; }
         af_family = AF_INET6;
-      } else { // Invalid address string
+      } else {
         return false;
       }
       
-      if (af_family == 0) {
-        return false;
-      }
-
-      sockaddr_storage  local_addr_storage;
-      socklen_t         addr_len;
+      sockaddr_storage  local_addr_storage  = { 0 };
+      socklen_t         addr_len            = 0;
       memset(&local_addr_storage, 0, sizeof(local_addr_storage));
 
       if (af_family == AF_INET) {
@@ -162,10 +159,10 @@ namespace coxnet {
           return false;
         }
         addr_len = sizeof(sockaddr_in);
-      } else { // AF_INET6
+      } else {
         sockaddr_in6* local_addr6 = reinterpret_cast<sockaddr_in6*>(&local_addr_storage);
-        local_addr6->sin6_family = AF_INET6;
-        local_addr6->sin6_port   = htons(port);
+        local_addr6->sin6_family  = AF_INET6;
+        local_addr6->sin6_port    = htons(port);
         if (inet_pton(AF_INET6, address, &local_addr6->sin6_addr) <= 0) {
           return false;
         }
@@ -184,8 +181,8 @@ namespace coxnet {
 
       // For dual-stack operation on an AF_INET6 socket listening on "::"
       if (af_family == AF_INET6 && 
-        (stack == SocketStack::kDualStack) &&
-        (strcmp(address, "::") == 0 || (strcmp(address, "0.0.0.0") == 0 && net_type == IPType::kInvalid))) { // "0.0.0.0" could imply "::" for dual stack
+          (stack == SocketStack::kDualStack) && 
+          (strcmp(address, "::") == 0 || (strcmp(address, "0.0.0.0") == 0 && net_type == IPType::kInvalid))) { // "0.0.0.0" could imply "::" for dual stack
         int ipv6_only = 0; // 0 means dual-stack (accept IPv4 as v4-mapped v6)
         if (stack == SocketStack::kOnlyIPv6) { ipv6_only = 1; } 
         if (::setsockopt(sock_handle, IPPROTO_IPV6, IPV6_V6ONLY, &ipv6_only, sizeof(ipv6_only)) == SOCKET_ERROR) {
@@ -273,32 +270,25 @@ namespace coxnet {
         bool is_listener_event = (sock_listener_ && conn == sock_listener_);
         if (ev->events & (EPOLLERR | EPOLLHUP | EPOLLRDHUP)) {
           if (is_listener_event) {
-            int err_code = 0;
-            socklen_t err_len = sizeof(err_code);
+            int       err_code  = 0;
+            socklen_t err_len   = sizeof(err_code);
             getsockopt(conn->native_handle(), SOL_SOCKET, SO_ERROR, &err_code, &err_len);
-            if (on_listen_err_) on_listen_err_(err_code ? err_code : EPIPE); // EPIPE for HUP/RDHUP if no specific error
-            
-            // Need to shut down the listener properly.
-                // It will be cleaned up by the _cleanup mechanism.
-                // The Poller might need to stop trying to listen.
-            if (conn->native_handle() != invalid_socket) {
-              epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, conn->native_handle(), nullptr);
-              // sock_listener_ still exists, its _close_handle will be called
-            }
-             
-            sock_listener_->_close_handle(err_code ? err_code : EPIPE); // Mark for cleanup
-            // sock_listener_ might be set to nullptr in _cleanup later.
+            err_code = err_code ? err_code : EPIPE; // EPIPE for HUP/RDHUP if no specific error
+            sock_listener_->_close_handle(err_code);
+            if (on_listen_err_) { on_listen_err_(sock_listener_->err_); }
           } else {
             int err_code = 0;
             if (ev->events & EPOLLERR) {
               socklen_t err_len = sizeof(err_code);
               getsockopt(conn->native_handle(), SOL_SOCKET, SO_ERROR, &err_code, &err_len);
             }
+
             // For EPOLLHUP/EPOLLRDHUP, err_code might be 0. We treat it as a clean close by peer.
             // If data is readable (EPOLLIN is also set), read it before closing.
             if ((ev->events & EPOLLIN) || (ev->events & EPOLLHUP)) {
               _try_read(conn);
             }
+
             conn->_close_handle(err_code ? err_code : 0); // 0 for HUP/RDHUP if no specific socket error
           }
 
@@ -333,14 +323,13 @@ namespace coxnet {
       }
 
       while (true) { // Edge-triggered, so accept all pending
-        sockaddr_storage  remote_addr_storage; // Use storage for IPv4/IPv6
-        socklen_t         addr_len    = sizeof(remote_addr_storage);
+        sockaddr_storage  remote_addr_storage = { 0 }; // Use storage for IPv4/IPv6
+        socklen_t         addr_len            = sizeof(remote_addr_storage);
         memset(&remote_addr_storage, 0, sizeof(remote_addr_storage));
 
         socket_t handle = ::accept4(sock_listener_->native_handle(), 
                                    reinterpret_cast<sockaddr*>(&remote_addr_storage), 
                                    &addr_len, SOCK_NONBLOCK | SOCK_CLOEXEC);
-
         if (handle == invalid_socket) {
           int err_code = get_last_error();
           if (err_code == EINTR || err_code == EAGAIN || err_code == EWOULDBLOCK) {

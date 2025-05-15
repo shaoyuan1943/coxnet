@@ -224,6 +224,7 @@ private:
     }
 #ifdef _WIN32
     void _overlapped() {
+      read_buff_->ensure_writable_size(max_size_per_read);
       memset(&recv_context_for_win_.Overlapped, 0, sizeof(recv_context_for_win_.Overlapped));
       recv_context_for_win_.Buf.buf = this->read_buff_->take_data();
       recv_context_for_win_.Buf.len = this->read_buff_->writable_size();
