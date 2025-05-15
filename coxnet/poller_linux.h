@@ -264,13 +264,13 @@ namespace coxnet {
       size_t  readed_total  = 0;
 
       while (true) {
-        auto data = conn->read_buff_->data();
+        auto data = conn->read_buff_->take_data();
         read_n = recv(conn->native_handle(), data, conn->read_buff_->writable_size(), 0);
         if (read_n > 0) {
           readed_total += read_n;
-          conn->read_buff_->_add_written_from_io(read_n);
+          conn->read_buff_->add_written_from_external_take(read_n);
           if (on_data_ != nullptr) {
-            on_data_(conn, conn->read_buff_->data(), conn->read_buff_->writable_size());
+            on_data_(conn, conn->read_buff_->take_data(), conn->read_buff_->writable_size());
           }
           conn->read_buff_->clear();
           continue;
