@@ -50,8 +50,9 @@ namespace coxnet {
     size_t writable_size()              { return size_ - end_; }
     size_t written_size()               { return end_ - begin_; }
     size_t written_size_from_seek()     { return end_ - seek_index_; }
-
-    char* take_data()                   { return data_; }
+    size_t readable_size()              { return written_size(); }
+    
+    char* take_data()                   { return &data_[begin_]; }
     char* take_data_from_seek()         { return &data_[seek_index_]; }
     void add_written_from_external_take(const size_t size_written) {
       assert(end_ + size_written <= size_);
@@ -70,18 +71,24 @@ namespace coxnet {
     }
 
     void write(const char* data, size_t size_written) {
-      if (writable_size() < size_written) {
-        size_       *= 2;
-        char* temp  = new char[size_];
-        memcpy(temp, data_, end_);
-
-        char* original  = data_;
-        data_           = temp;
-        delete[] original;
-      }
-
+      ensure_writable_size(size_written);
       memcpy(&data_[end_], data, size_written);
       end_ += size_written;
+    }
+
+    void ensure_writable_size(size_t required_size) {
+      if (writable_size() >= required_size) {
+          return;
+      }
+
+      size_t  new_size  = size_ + required_size * 2;
+      char*   temp      = new char[new_size];
+      memcpy(temp, data_ + begin_, end_);
+
+      char* original  = data_;
+      data_           = temp;
+      size_           = new_size;
+      delete[] original;
     }
 #ifdef _WIN32
     friend void WINAPI IOCompletionCallBack(DWORD, DWORD, LPOVERLAPPED);

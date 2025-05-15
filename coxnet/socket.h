@@ -62,21 +62,17 @@ public:
 #endif
 
       if (!Socket::_is_listener()) {
-        read_buff_ = new SimpleBuffer(max_read_buff_size);
+        read_buff_  = new SimpleBuffer(max_read_buff_size);
         write_buff_ = new SimpleBuffer(max_write_buff_size);
       }
     }
 
     virtual ~Socket() {
-      if (read_buff_ != nullptr) {
-        delete read_buff_;
-        read_buff_ = nullptr;
-      }
+      delete read_buff_;
+      read_buff_ = nullptr;
 
-      if (write_buff_ != nullptr) {
-        delete write_buff_;
-        write_buff_ = nullptr;
-      }
+      delete write_buff_;
+      write_buff_ = nullptr;
     }
 
     Socket(const Socket&) = delete;
@@ -92,7 +88,7 @@ public:
       _close_handle(0);
     }
 
-    std::tuple<char*, int> remote_addr() { return std::make_tuple(remote_addr_, remote_port_); }
+    std::pair<const char*, uint16_t> remote_addr() { return {remote_addr_str_, remote_port_}; }
 
     int write(const char* data, size_t size) {
       if (!is_valid() || user_closed_ || err_ != 0) {
@@ -106,7 +102,7 @@ public:
 
       size_t  total_sent   = 0;
       size_t  data_size    = size;
-
+      
       while (total_sent < data_size) {
         int sent_n = ::send(native_handle(), data + total_sent, data_size - total_sent, 0);
         if (sent_n > 0) {
@@ -216,8 +212,14 @@ private:
 #endif
     }
 
-    void _set_remote_addr(const char* addr, uint32_t port) {
-      memcpy(remote_addr_, addr, 16);
+    void _set_remote_addr(const char* addr_str, uint16_t port) {
+      if (addr_str) {
+        strncpy(remote_addr_str_, addr_str, INET6_ADDRSTRLEN - 1);
+        remote_addr_str_[INET6_ADDRSTRLEN - 1] = '\0'; // Ensure null termination
+      } else {
+        remote_addr_str_[0] = '\0';
+      }
+      
       remote_port_ = port;
     }
 #ifdef _WIN32
@@ -232,7 +234,7 @@ private:
   private:
     socket_t          handle_           = invalid_socket;
 
-    char              remote_addr_[16]  = { 0 };
+    char              remote_addr_str_[INET6_ADDRSTRLEN]  = { 0 };
     uint32_t          remote_port_      = 0;
 
     SimpleBuffer*     read_buff_        = nullptr;
@@ -244,7 +246,7 @@ private:
     Cleaner*          cleaner_          = nullptr;
 
 #ifdef __linux__
-    int               epoll_fd_         = -1;
+    int               epoll_fd_           = -1;    
 #endif
 
 #ifdef _WIN32

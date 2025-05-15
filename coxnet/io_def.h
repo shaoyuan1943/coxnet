@@ -13,6 +13,10 @@
 #pragma comment(lib, "ws2_32.lib")
 #pragma comment(lib, "Mswsock.lib")
 
+#ifndef INET6_ADDRSTRLEN
+#define INET6_ADDRSTRLEN 46 // Standard IPv6 address string length
+#endif
+
 #else
 
 #include <arpa/inet.h>
@@ -109,21 +113,18 @@ namespace coxnet {
       return IPType::kInvalid;
     }
 
-    static std::regex v4_regex(R"((\d{1,3}\.){3}\d{1,3})");
-    static std::regex v6_regex(R"((([0-9a-fA-F]{0,4}:){1,7}[0-9a-fA-F]{0,4}))");
-
-    if (std::regex_match(address, v6_regex)) {
-      return IPType::kIPv6;
+    struct sockaddr_in sa;
+    if (inet_pton(AF_INET, address.c_str(), &(sa.sin_addr)) == 1) {
+        return IPType::kIPv4;
     }
-
-    if (std::regex_match(address, v4_regex)) {
-      return IPType::kIPv4;
+    struct sockaddr_in6 sa6;
+    if (inet_pton(AF_INET6, address.c_str(), &(sa6.sin6_addr)) == 1) {
+        return IPType::kIPv6;
     }
-
     return IPType::kInvalid;
   }
 
-  enum class SocketStackMode { kOnlyIPv4, kOnlyIPv6, kIPv4IPv6 };
+  enum class SocketStack { kOnlyIPv4, kOnlyIPv6, kDualStack };
 } // namespace coxnet
 
 #endif // IO_DEF_H
