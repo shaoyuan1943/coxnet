@@ -276,12 +276,12 @@ namespace coxnet {
           continue;
         } 
         
-        if (read_n == 0) {
-          conn->_close_handle(get_last_error());
+        int err_code = get_last_error();
+        if (read_n == 0) {  // connection reset by peer
+          conn->_close_handle(err_code);
           break;
         } 
         
-        int err_code = get_last_error();
         if (adjust_io_error_option(err_code) == ErrorOption::kNext) {
           break;
         } 
