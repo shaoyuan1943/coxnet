@@ -37,7 +37,7 @@ namespace coxnet {
     virtual void poll() = 0;
     virtual Socket* connect(const char address[], const uint16_t port,
       DataCallback on_data, CloseCallback on_close) = 0;
-    virtual bool listen(const char address[], const uint16_t port, SocketStack stack, 
+    virtual bool listen(const char address[], const uint16_t port, ProtocolStack stack, 
       ConnectionCallback on_connection, DataCallback on_data, CloseCallback on_close) = 0;
   protected:
     void _close_conns_internal() {

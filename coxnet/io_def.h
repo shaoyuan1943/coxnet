@@ -116,18 +116,20 @@ namespace coxnet {
       return IPType::kInvalid;
     }
 
-    struct sockaddr_in sa;
+    sockaddr_in sa = { 0 };
     if (inet_pton(AF_INET, address.c_str(), &(sa.sin_addr)) == 1) {
         return IPType::kIPv4;
     }
-    struct sockaddr_in6 sa6;
+
+    sockaddr_in6 sa6 = { 0 };
     if (inet_pton(AF_INET6, address.c_str(), &(sa6.sin6_addr)) == 1) {
         return IPType::kIPv6;
     }
+
     return IPType::kInvalid;
   }
 
-  enum class SocketStack { kOnlyIPv4, kOnlyIPv6, kDualStack };
+  enum class ProtocolStack { kOnlyIPv4, kOnlyIPv6, kDualStack };
 } // namespace coxnet
 
 #endif // IO_DEF_H

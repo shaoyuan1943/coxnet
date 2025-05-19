@@ -51,7 +51,7 @@ namespace coxnet {
       }
 
       int               af_family           = 0;
-      sockaddr_storage  remote_addr_storage = { 0 };
+      sockaddr_storage  remote_addr_storage = {};
       int               addr_len            = 0;
       memset(&remote_addr_storage, 0, sizeof(remote_addr_storage));
 
@@ -82,20 +82,6 @@ namespace coxnet {
         return nullptr;
       }
 
-      sockaddr_storage bind_addr_storage = { 0 };
-      memset(&bind_addr_storage, 0, sizeof(bind_addr_storage));
-      if (af_family == AF_INET) {
-        reinterpret_cast<sockaddr_in*>(&bind_addr_storage)->sin_family = AF_INET;
-        // sin_addr and sin_port = 0 (any)
-      } else {
-        reinterpret_cast<sockaddr_in6*>(&bind_addr_storage)->sin6_family = AF_INET6;
-        // sin6_addr and sin6_port = 0 (any)
-      }
-      if (::bind(sock_handle, reinterpret_cast<sockaddr*>(&bind_addr_storage), af_family == AF_INET ? sizeof(sockaddr_in) : sizeof(sockaddr_in6)) == SOCKET_ERROR) {
-        closesocket(sock_handle);
-        return nullptr;
-      }
-
       if (!Socket::_set_non_blocking(sock_handle)) {
         closesocket(sock_handle);
         return nullptr;
@@ -108,7 +94,7 @@ namespace coxnet {
           return nullptr;
         }
         // WSAEWOULDBLOCK is expected, use select to wait for connection.
-        fd_set write_set = { 0 };
+        fd_set write_set = {};
         FD_ZERO(&write_set);
         FD_SET(sock_handle, &write_set);
         timeval timeout{ 5, 0 }; // 5-second timeout
@@ -145,37 +131,39 @@ namespace coxnet {
       return conn;
     }
 
-    bool listen(const char address[], const uint16_t port, SocketStack stack,
+    // Only IPv4: address is IPv4, stack is kOnlyIPv4
+    // Only IPv6: address is IPv6, stack is kOnlyIPv6
+    // Dual: address is IPv6, stack is kDual
+    bool listen(const char address[], const uint16_t port, ProtocolStack stack,
                 ConnectionCallback on_connection, DataCallback on_data, CloseCallback on_close) override {
       const IPType ip_type = ip_address_version(std::string(address));
       if (ip_type == IPType::kInvalid) {
         return false;
       }
 
+      if (sock_listener_ != nullptr) {
+        return false;
+      }
+
       int af_family = 0;
-      if (strcmp(address, "0.0.0.0") == 0) {
-        if (stack == SocketStack::kOnlyIPv6) { return false; }
+      int dual_mode = 0;
+      if (ip_type == IPType::kIPv4 && stack == ProtocolStack::kOnlyIPv4) {
         af_family = AF_INET;
       }
 
-      if (strcmp(address, "::") == 0) {
-        if (stack == SocketStack::kOnlyIPv4) { return false; }
+      if (ip_type == IPType::kIPv6 && stack == ProtocolStack::kOnlyIPv6) {
         af_family = AF_INET6;
       }
 
-      if (ip_type == IPType::kIPv4) {
-        if (stack == SocketStack::kOnlyIPv6) { return false; }
-        af_family = AF_INET;
-      }
-
-      if (ip_type == IPType::kIPv6) {
-        if (stack == SocketStack::kOnlyIPv4) { return false; }
+      // for dual stack: supports both IPv4 and IPv6 simultaneously
+      if (ip_type == IPType::kIPv6 && stack == ProtocolStack::kDualStack) {
         af_family = AF_INET6;
+        dual_mode = 1;
       }
 
       if (af_family == 0) { return false; }
 
-      sockaddr_storage  local_addr_storage  = { 0 };
+      sockaddr_storage  local_addr_storage  = {};
       int               addr_len            = 0; // bind takes int for addr_len
       memset(&local_addr_storage, 0, sizeof(local_addr_storage));
 
@@ -187,7 +175,9 @@ namespace coxnet {
           return false;
         }
         addr_len = sizeof(sockaddr_in);
-      } else { // AF_INET6
+      }
+
+      if (af_family == AF_INET6) { // AF_INET6
         sockaddr_in6* local_addr6 = reinterpret_cast<sockaddr_in6*>(&local_addr_storage);
         local_addr6->sin6_family  = AF_INET6;
         local_addr6->sin6_port    = htons(port);
@@ -197,57 +187,49 @@ namespace coxnet {
         addr_len = sizeof(sockaddr_in6);
       }
 
-      // Using WSASocket with WSA_FLAG_OVERLAPPED is standard for IOCP.
-      // If not using a self-managed IOCP, ::socket() is fine, then BindIoCompletionCallback.
-      // The current model uses BindIoCompletionCallback, so ::socket() is okay. Let's revert to ::socket.
-      // native_handle = ::socket(af_family, SOCK_STREAM, IPPROTO_TCP);
-      socket_t native_handle = ::WSASocket(af_family, SOCK_STREAM, IPPROTO_TCP, nullptr, 0, WSA_FLAG_OVERLAPPED);
-      if (native_handle == invalid_socket) {
+      socket_t sock_handle = ::socket(af_family, SOCK_STREAM, IPPROTO_TCP);
+      if (sock_handle == invalid_socket) {
         return false;
       }
 
-      int reuse_addr_val = 1;
-      if (::setsockopt(native_handle, SOL_SOCKET, SO_REUSEADDR,
-          reinterpret_cast<char*>(&reuse_addr_val), sizeof(reuse_addr_val)) == SOCKET_ERROR) {
-        closesocket(native_handle);
+      int reuse_addr = 1;
+      if (::setsockopt(sock_handle, SOL_SOCKET, SO_REUSEADDR,
+          reinterpret_cast<char*>(&reuse_addr), sizeof(reuse_addr)) == SOCKET_ERROR) {
+        closesocket(sock_handle);
         return false;
       }
 
-      // IPV6_V6ONLY setting for dual-stack
-      if (af_family == AF_INET6 &&
-          (stack == SocketStack::kDualStack) &&
-          (strcmp(address, "::") == 0 || (strcmp(address, "0.0.0.0") == 0 && ip_type == IPType::kInvalid)) ) {
-        DWORD ipv6_only = 0; // 0 for dual-stack
-        if (stack == SocketStack::kOnlyIPv6) ipv6_only = 1;
-
-        if (::setsockopt(native_handle, IPPROTO_IPV6, IPV6_V6ONLY,
+      // for dual protocol stack
+      if (af_family == AF_INET6 && dual_mode == 1) {
+        DWORD ipv6_only = 0;
+        if (::setsockopt(sock_handle, IPPROTO_IPV6, IPV6_V6ONLY,
             reinterpret_cast<char*>(&ipv6_only), sizeof(ipv6_only)) == SOCKET_ERROR) {
           // On modern Windows, this should succeed and is important for dual-stack.
-          if (ipv6_only == 0) { // If tried to enable dual-stack
-            closesocket(native_handle);
+          if (ipv6_only == 0) {
+            closesocket(sock_handle);
             return false;
           }
         }
       }
 
-      if (::bind(native_handle, reinterpret_cast<sockaddr*>(&local_addr_storage), addr_len) == SOCKET_ERROR) {
-        closesocket(native_handle);
+      if (::bind(sock_handle, reinterpret_cast<sockaddr*>(&local_addr_storage), addr_len) == SOCKET_ERROR) {
+        closesocket(sock_handle);
         return false;
       }
 
-      if (::listen(native_handle, SOMAXCONN) == SOCKET_ERROR) { // Use SOMAXCONN
-        closesocket(native_handle);
+      if (::listen(sock_handle, SOMAXCONN) == SOCKET_ERROR) { // Use SOMAXCONN
+        closesocket(sock_handle);
         return false;
       }
 
       // Listener socket should be non-blocking for accept loop
-      if (!Socket::_set_non_blocking(native_handle)) {
-        closesocket(native_handle);
+      if (!Socket::_set_non_blocking(sock_handle)) {
+        closesocket(sock_handle);
         return false;
       }
 
       // Listener itself doesn't use IOCP callbacks for accept, it uses a polling accept.
-      sock_listener_  = new listener(native_handle);
+      sock_listener_  = new listener(sock_handle);
       on_connection_  = std::move(on_connection);
       on_data_        = std::move(on_data);
       on_close_       = std::move(on_close);
@@ -255,7 +237,7 @@ namespace coxnet {
       return true;
     }
 
-    void poll() override { _poll(); _cleanup(); }
+    void poll() override { _poll_once(); _cleanup(); }
     void shut() override {
       if (sock_listener_ != nullptr && sock_listener_->native_handle() != invalid_socket) {
         sock_listener_->_close_handle(0);
@@ -267,7 +249,7 @@ namespace coxnet {
       sock_listener_ = nullptr;
     }
   protected:
-    void _poll() {
+    void _poll_once() {
       if (sock_listener_ == nullptr || !sock_listener_->is_valid()) {
         return;
       }
@@ -290,7 +272,7 @@ namespace coxnet {
   private:
     void _wait_new_connection() {
       while (sock_listener_ != nullptr && sock_listener_->is_valid()) {
-        sockaddr_storage  remote_addr_storage = { 0 }; // For IPv4/IPv6
+        sockaddr_storage  remote_addr_storage = {}; // For IPv4/IPv6
         int               addr_len            = sizeof(remote_addr_storage);
         memset(&remote_addr_storage, 0, sizeof(remote_addr_storage));
 
@@ -329,6 +311,7 @@ namespace coxnet {
           client_port = ntohs(sin6->sin6_port);
           break;
         default:
+          assert(false, "Unsupport net family");
           break;
         }
 

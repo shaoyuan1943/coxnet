@@ -35,7 +35,7 @@ namespace coxnet {
       }
 
       int               af_family           = 0;
-      sockaddr_storage  remote_addr_storage = { 0 };
+      sockaddr_storage  remote_addr_storage = {};
       socklen_t         addr_len            = 0;
       memset(&remote_addr_storage, 0, sizeof(remote_addr_storage));
 
@@ -113,7 +113,7 @@ namespace coxnet {
       return conn;
     }
 
-    bool listen(const char address[], uint16_t port, SocketStack stack, 
+    bool listen(const char address[], uint16_t port, ProtocolStack stack, 
                 ConnectionCallback on_connection, DataCallback on_data, CloseCallback on_close) override {
       IPType ip_type = ip_address_version(std::string(address));
       if (ip_type == IPType::kInvalid) {
@@ -125,29 +125,24 @@ namespace coxnet {
       }
 
       int af_family = 0;
-      if (strcmp(address, "0.0.0.0") == 0) { // Wildcard IPv4
-        if (stack == SocketStack::kOnlyIPv6) { return false; } // Cannot bind 0.0.0.0 if only IPv6
+      int dual_mode = 0;
+      if (ip_type == IPType::kIPv4 && stack == ProtocolStack::kOnlyIPv4) {
         af_family = AF_INET;
-        if (stack == SocketStack::kDualStack) {
-          // If dual stack is preferred for "0.0.0.0", we actually want to listen on "::" (IPv6)
-          // and set IPV6_V6ONLY = 0. The user should pass "::" for this.
-          // Here, "0.0.0.0" with kDualStack means listen on IPv4 AND if "::" is also listened, it's separate.
-          // For simplicity, if "0.0.0.0" is given, stick to IPv4 unless explicitly kOnlyIPv6 (which is an error).
-        }
-      } else if (strcmp(address, "::") == 0) { // Wildcard IPv6
-        if (stack == SocketStack::kOnlyIPv4) { return false; } // Cannot bind :: if only IPv4
-        af_family = AF_INET6;
-      } else if (ip_type == IPType::kIPv4) {
-        if (stack == SocketStack::kOnlyIPv6) { return false; }
-        af_family = AF_INET;
-      } else if (ip_type == IPType::kIPv6) {
-        if (stack == SocketStack::kOnlyIPv4) { return false; }
-        af_family = AF_INET6;
-      } else {
-        return false;
       }
-      
-      sockaddr_storage  local_addr_storage  = { 0 };
+
+      if (ip_type == IPType::kIPv6 && stack == ProtocolStack::kOnlyIPv6) {
+        af_family = AF_INET6;
+      }
+
+      // for dual stack: supports both IPv4 and IPv6 simultaneously
+      if (ip_type == IPType::kIPv6 && stack == ProtocolStack::kDualStack) {
+        af_family = AF_INET6;
+        dual_mode = 1;
+      }
+
+      if (af_family == 0) { return false; }
+
+      sockaddr_storage  local_addr_storage  = {};
       socklen_t         addr_len            = 0;
       memset(&local_addr_storage, 0, sizeof(local_addr_storage));
 
@@ -159,7 +154,9 @@ namespace coxnet {
           return false;
         }
         addr_len = sizeof(sockaddr_in);
-      } else {
+      } 
+
+      if (af_family == AF_INET6) {
         sockaddr_in6* local_addr6 = reinterpret_cast<sockaddr_in6*>(&local_addr_storage);
         local_addr6->sin6_family  = AF_INET6;
         local_addr6->sin6_port    = htons(port);
@@ -179,17 +176,13 @@ namespace coxnet {
         ::close(get_last_error()); return false;
       }
 
-      // For dual-stack operation on an AF_INET6 socket listening on "::"
-      if (af_family == AF_INET6 && 
-          (stack == SocketStack::kDualStack) && 
-          (strcmp(address, "::") == 0 || (strcmp(address, "0.0.0.0") == 0 && ip_type == IPType::kInvalid))) { // "0.0.0.0" could imply "::" for dual stack
-        int ipv6_only = 0; // 0 means dual-stack (accept IPv4 as v4-mapped v6)
-        if (stack == SocketStack::kOnlyIPv6) { ipv6_only = 1; } 
+      // for dual protocol stack
+      if (af_family == AF_INET6 && dual_mode == 1) {
+        int ipv6_only = 0;
         if (::setsockopt(sock_handle, IPPROTO_IPV6, IPV6_V6ONLY, &ipv6_only, sizeof(ipv6_only)) == SOCKET_ERROR) {
-          // Non-critical on some older systems, but log it. Could be an issue.
-          // For now, let's treat as error if dual-stack was intended.
-          if (ipv6_only == 0) { // If we tried to enable dual-stack and failed
-            ::close(sock_handle); return false;
+          if (ipv6_only == 0) {
+            ::close(sock_handle);
+            return false;
           }
         }
       }
@@ -206,11 +199,7 @@ namespace coxnet {
         ::close(sock_handle); return false;
       }
 
-      // Listener does not need epoll_fd in its Socket object, pass -1 or specific marker.
-      // The listener socket itself is added to epoll here.
       sock_listener_ = new listener(sock_handle); 
-      // Listener socket is also a Socket object, so it's data.ptr.
-      // No EPOLLOUT needed for listener. EPOLLRDHUP for peer close detection (less common for listener).
       epoll_event ev{ .events = EPOLLIN | EPOLLET, .data.ptr = sock_listener_ };
       if (epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, sock_handle, &ev) != 0) {
         ::close(sock_handle);
@@ -228,7 +217,7 @@ namespace coxnet {
     void poll() override {
       if (epoll_fd_ == -1) { return; }
 
-      _poll(); 
+      _poll_once(); 
       _cleanup(); 
     }
 
@@ -251,7 +240,7 @@ namespace coxnet {
       sock_listener_ = nullptr;
     }
   protected:
-    void _poll() {
+    void _poll_once() {
       if (epoll_fd_ == -1 || epoll_events_ == nullptr) {
         return;
       }
@@ -323,7 +312,7 @@ namespace coxnet {
       }
 
       while (true) { // Edge-triggered, so accept all pending
-        sockaddr_storage  remote_addr_storage = { 0 }; // Use storage for IPv4/IPv6
+        sockaddr_storage  remote_addr_storage = {}; // Use storage for IPv4/IPv6
         socklen_t         addr_len            = sizeof(remote_addr_storage);
         memset(&remote_addr_storage, 0, sizeof(remote_addr_storage));
 
