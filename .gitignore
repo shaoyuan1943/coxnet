@@ -60,3 +60,6 @@ samples/my_client/.idea/*.*
 
 samples/my_server/.idea/*
 samples/my_server/.idea/*.*
+
+.vscode/*
+.vscode/*.*
