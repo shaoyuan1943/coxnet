@@ -36,7 +36,7 @@ namespace coxnet {
   class Poller final : public IPoller {
   public:
     Poller() = default;
-    ~Poller() { shut(); };
+    ~Poller() override = default;
 
     Poller(const Poller&) = delete;
     Poller& operator=(const Poller&) = delete;
@@ -45,17 +45,17 @@ namespace coxnet {
 
     Socket* connect(const char address[], const uint16_t port,
                     DataCallback on_data, CloseCallback on_close) override {
-      IPType net_type = ip_address_version(std::string(address));
-      if (net_type == IPType::kInvalid) {
+      IPType ip_type = ip_address_version(std::string(address));
+      if (ip_type == IPType::kInvalid) {
         return nullptr;
       }
 
       int               af_family           = 0;
-      sockaddr_storage  remote_addr_storage = {};
+      sockaddr_storage  remote_addr_storage = { 0 };
       int               addr_len            = 0;
       memset(&remote_addr_storage, 0, sizeof(remote_addr_storage));
 
-      if (net_type == IPType::kIPv4) {
+      if (ip_type == IPType::kIPv4) {
         af_family                 = AF_INET;
         sockaddr_in* remote_addr  = reinterpret_cast<sockaddr_in*>(&remote_addr_storage);
         remote_addr->sin_family   = af_family;
@@ -66,7 +66,7 @@ namespace coxnet {
         addr_len = sizeof(sockaddr_in);
       }
 
-      if (net_type == IPType::kIPv6) {
+      if (ip_type == IPType::kIPv6) {
         af_family                   = AF_INET6;
         sockaddr_in6* remote_addr6  = reinterpret_cast<sockaddr_in6*>(&remote_addr_storage);
         remote_addr6->sin6_family   = af_family;
@@ -147,8 +147,8 @@ namespace coxnet {
 
     bool listen(const char address[], const uint16_t port, SocketStack stack,
                 ConnectionCallback on_connection, DataCallback on_data, CloseCallback on_close) override {
-      const IPType net_type = ip_address_version(std::string(address));
-      if (net_type == IPType::kInvalid) {
+      const IPType ip_type = ip_address_version(std::string(address));
+      if (ip_type == IPType::kInvalid) {
         return false;
       }
 
@@ -156,17 +156,21 @@ namespace coxnet {
       if (strcmp(address, "0.0.0.0") == 0) {
         if (stack == SocketStack::kOnlyIPv6) { return false; }
         af_family = AF_INET;
-      } else if (strcmp(address, "::") == 0) {
+      }
+
+      if (strcmp(address, "::") == 0) {
         if (stack == SocketStack::kOnlyIPv4) { return false; }
         af_family = AF_INET6;
-      } else if (net_type == IPType::kIPv4) {
+      }
+
+      if (ip_type == IPType::kIPv4) {
         if (stack == SocketStack::kOnlyIPv6) { return false; }
         af_family = AF_INET;
-      } else if (net_type == IPType::kIPv6) {
+      }
+
+      if (ip_type == IPType::kIPv6) {
         if (stack == SocketStack::kOnlyIPv4) { return false; }
         af_family = AF_INET6;
-      } else {
-        return false;
       }
 
       if (af_family == 0) { return false; }
@@ -212,7 +216,7 @@ namespace coxnet {
       // IPV6_V6ONLY setting for dual-stack
       if (af_family == AF_INET6 &&
           (stack == SocketStack::kDualStack) &&
-          (strcmp(address, "::") == 0 || (strcmp(address, "0.0.0.0") == 0 && net_type == IPType::kInvalid)) ) {
+          (strcmp(address, "::") == 0 || (strcmp(address, "0.0.0.0") == 0 && ip_type == IPType::kInvalid)) ) {
         DWORD ipv6_only = 0; // 0 for dual-stack
         if (stack == SocketStack::kOnlyIPv6) ipv6_only = 1;
 
@@ -252,6 +256,16 @@ namespace coxnet {
     }
 
     void poll() override { _poll(); _cleanup(); }
+    void shut() override {
+      if (sock_listener_ != nullptr && sock_listener_->native_handle() != invalid_socket) {
+        sock_listener_->_close_handle(0);
+      }
+
+      IPoller::_close_conns_internal();
+
+      delete sock_listener_;
+      sock_listener_ = nullptr;
+    }
   protected:
     void _poll() {
       if (sock_listener_ == nullptr || !sock_listener_->is_valid()) {
@@ -275,11 +289,6 @@ namespace coxnet {
     }
   private:
     void _wait_new_connection() {
-      socket_t    handle        = invalid_socket;
-      sockaddr_in remote_addr   = {};
-      int         addr_len      = sizeof(sockaddr_in);
-      int         event_count   = 0;
-
       while (sock_listener_ != nullptr && sock_listener_->is_valid()) {
         sockaddr_storage  remote_addr_storage = { 0 }; // For IPv4/IPv6
         int               addr_len            = sizeof(remote_addr_storage);

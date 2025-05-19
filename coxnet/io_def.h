@@ -23,6 +23,7 @@
 #include <fcntl.h>
 #include <netdb.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -94,6 +95,8 @@ namespace coxnet {
       return ErrorOption::kClose;
     }
 #endif // __linux__
+
+    return ErrorOption::kClose;
   }
 
   // socket read and write buffer size
@@ -104,7 +107,7 @@ namespace coxnet {
   static constexpr size_t max_size_per_write    = (size_t)(1024 * 2);
   static constexpr size_t max_size_per_read     = (size_t)(1024 * 2);
 
-  static constexpr size_t max_epoll_event_count = 32;
+  static constexpr size_t max_epoll_event_count = 64;
 
   enum class IPType { kInvalid, kIPv4, kIPv6 };
 

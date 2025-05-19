@@ -29,8 +29,8 @@ namespace coxnet {
     Poller& operator=(Poller&& other) = delete;
 
     Socket* connect(const char address[], const uint16_t port, DataCallback on_data, CloseCallback on_close) override {
-      IPType net_type = ip_address_version(std::string(address));
-      if (net_type == IPType::kInvalid) {
+      IPType ip_type = ip_address_version(std::string(address));
+      if (ip_type == IPType::kInvalid) {
         return nullptr;
       }
 
@@ -39,7 +39,7 @@ namespace coxnet {
       socklen_t         addr_len            = 0;
       memset(&remote_addr_storage, 0, sizeof(remote_addr_storage));
 
-      if (net_type == IPType::kIPv4) {
+      if (ip_type == IPType::kIPv4) {
         af_family                 = AF_INET;
         sockaddr_in* remote_addr  = reinterpret_cast<sockaddr_in*>(&remote_addr_storage);
         remote_addr->sin_family   = af_family;
@@ -51,7 +51,7 @@ namespace coxnet {
         addr_len = sizeof(sockaddr_in);
       }
 
-      if (net_type == IPType::kIPv6) {
+      if (ip_type == IPType::kIPv6) {
         af_family                   = AF_INET6;
         sockaddr_in6* remote_addr6  = reinterpret_cast<sockaddr_in6*>(&remote_addr_storage);
         remote_addr6->sin6_family   = af_family;
@@ -115,8 +115,8 @@ namespace coxnet {
 
     bool listen(const char address[], uint16_t port, SocketStack stack, 
                 ConnectionCallback on_connection, DataCallback on_data, CloseCallback on_close) override {
-      IPType net_type = ip_address_version(std::string(address));
-      if (net_type == IPType::kInvalid) {
+      IPType ip_type = ip_address_version(std::string(address));
+      if (ip_type == IPType::kInvalid) {
         return false;
       }
 
@@ -137,10 +137,10 @@ namespace coxnet {
       } else if (strcmp(address, "::") == 0) { // Wildcard IPv6
         if (stack == SocketStack::kOnlyIPv4) { return false; } // Cannot bind :: if only IPv4
         af_family = AF_INET6;
-      } else if (net_type == IPType::kIPv4) {
+      } else if (ip_type == IPType::kIPv4) {
         if (stack == SocketStack::kOnlyIPv6) { return false; }
         af_family = AF_INET;
-      } else if (net_type == IPType::kIPv6) {
+      } else if (ip_type == IPType::kIPv6) {
         if (stack == SocketStack::kOnlyIPv4) { return false; }
         af_family = AF_INET6;
       } else {
@@ -182,7 +182,7 @@ namespace coxnet {
       // For dual-stack operation on an AF_INET6 socket listening on "::"
       if (af_family == AF_INET6 && 
           (stack == SocketStack::kDualStack) && 
-          (strcmp(address, "::") == 0 || (strcmp(address, "0.0.0.0") == 0 && net_type == IPType::kInvalid))) { // "0.0.0.0" could imply "::" for dual stack
+          (strcmp(address, "::") == 0 || (strcmp(address, "0.0.0.0") == 0 && ip_type == IPType::kInvalid))) { // "0.0.0.0" could imply "::" for dual stack
         int ipv6_only = 0; // 0 means dual-stack (accept IPv4 as v4-mapped v6)
         if (stack == SocketStack::kOnlyIPv6) { ipv6_only = 1; } 
         if (::setsockopt(sock_handle, IPPROTO_IPV6, IPV6_V6ONLY, &ipv6_only, sizeof(ipv6_only)) == SOCKET_ERROR) {
@@ -234,10 +234,10 @@ namespace coxnet {
 
     void shut() override {
       if (sock_listener_ != nullptr && sock_listener_->native_handle() != invalid_socket) {
-        epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, sock_listener_->native_handle(), nullptr);
+        sock_listener_->_close_handle(0);
       }
 
-      IPoller::_close_conns();
+      IPoller::_close_conns_internal();
 
       if (epoll_fd_ != -1) {
         close(epoll_fd_);

@@ -27,21 +27,22 @@ namespace coxnet {
       });
     }
 
-    virtual ~IPoller() { if (cleaner_ != nullptr) delete cleaner_; };
-    virtual void shut() {};
+    virtual ~IPoller() { 
+      _cleanup();
+
+      delete cleaner_;
+      cleaner_ = nullptr;  
+    };
+    virtual void shut() = 0;
     virtual void poll() = 0;
     virtual Socket* connect(const char address[], const uint16_t port,
       DataCallback on_data, CloseCallback on_close) = 0;
     virtual bool listen(const char address[], const uint16_t port, SocketStack stack, 
       ConnectionCallback on_connection, DataCallback on_data, CloseCallback on_close) = 0;
   protected:
-    void _close_conns() {
+    void _close_conns_internal() {
       for(const auto& [handle, conn] : conns_) {
         conn->_close_handle();
-      }
-
-      if (sock_listener_ != nullptr) {
-        sock_listener_->_close_handle();
       }
 
       // sleep 100ms, wait io event
