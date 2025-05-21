@@ -341,8 +341,8 @@ namespace coxnet {
       DWORD recv_bytes  = 0;
       DWORD flags       = 0;
       int result = ::WSARecv(conn->native_handle(),
-        &conn->recv_context_for_win_.Buf, 1, &recv_bytes, &flags,
-        &conn->recv_context_for_win_.Overlapped, nullptr);
+                              &conn->recv_context_for_win_.Buf, 1, &recv_bytes, &flags,
+                              &conn->recv_context_for_win_.Overlapped, nullptr);
       if (result == SOCKET_ERROR) {
         if (const int err = get_last_error(); adjust_io_error_option(err) == ErrorOption::kClose) {
           conn->_close_handle(err);

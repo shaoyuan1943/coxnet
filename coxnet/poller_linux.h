@@ -151,9 +151,7 @@ namespace coxnet {
         sockaddr_in* local_addr   = reinterpret_cast<sockaddr_in*>(&local_addr_storage);
         local_addr->sin_family    = AF_INET;
         local_addr->sin_port      = htons(port);
-        if (inet_pton(AF_INET, address, &local_addr->sin_addr) <= 0) {
-          return false;
-        }
+        if (inet_pton(AF_INET, address, &local_addr->sin_addr) <= 0) { return false; }
         addr_len = sizeof(sockaddr_in);
       } 
 
@@ -161,20 +159,17 @@ namespace coxnet {
         sockaddr_in6* local_addr6 = reinterpret_cast<sockaddr_in6*>(&local_addr_storage);
         local_addr6->sin6_family  = AF_INET6;
         local_addr6->sin6_port    = htons(port);
-        if (inet_pton(AF_INET6, address, &local_addr6->sin6_addr) <= 0) {
-          return false;
-        }
+        if (inet_pton(AF_INET6, address, &local_addr6->sin6_addr) <= 0) { return false; }
         addr_len = sizeof(sockaddr_in6);
       }
 
       socket_t sock_handle = ::socket(af_family, SOCK_STREAM, IPPROTO_TCP); // Use IPPROTO_TCP for stream
-      if (sock_handle == invalid_socket) {
-        return false;
-      }
+      if (sock_handle == invalid_socket) { return false; }
 
       int reuse_addr = 1;
       if (::setsockopt(sock_handle, SOL_SOCKET, SO_REUSEADDR, &reuse_addr, sizeof(reuse_addr)) == SOCKET_ERROR) {
-        ::close(get_last_error()); return false;
+        ::close(get_last_error()); 
+        return false;
       }
 
       // for dual protocol stack
@@ -189,15 +184,18 @@ namespace coxnet {
       }
 
       if (::bind(sock_handle, reinterpret_cast<sockaddr*>(&local_addr_storage), addr_len) == SOCKET_ERROR) {
-        ::close(sock_handle); return false;
+        ::close(sock_handle); 
+        return false;
       }
 
       if (::listen(sock_handle, SOMAXCONN) == SOCKET_ERROR) { // Use SOMAXCONN for backlog
-        ::close(sock_handle); return false;
+        ::close(sock_handle); 
+        return false;
       }
 
       if (!Socket::_set_non_blocking(sock_handle)) {
-        ::close(sock_handle); return false;
+        ::close(sock_handle); 
+        return false;
       }
 
       sock_listener_ = new listener(sock_handle); 
@@ -318,8 +316,8 @@ namespace coxnet {
         memset(&remote_addr_storage, 0, sizeof(remote_addr_storage));
 
         socket_t handle = ::accept4(sock_listener_->native_handle(), 
-                                   reinterpret_cast<sockaddr*>(&remote_addr_storage), 
-                                   &addr_len, SOCK_NONBLOCK | SOCK_CLOEXEC);
+                                    reinterpret_cast<sockaddr*>(&remote_addr_storage), 
+                                    &addr_len, SOCK_NONBLOCK | SOCK_CLOEXEC);
         if (handle == invalid_socket) {
           int err_code = get_last_error();
           if (err_code == EINTR || err_code == EAGAIN || err_code == EWOULDBLOCK) {
