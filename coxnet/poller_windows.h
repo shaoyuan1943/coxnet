@@ -45,7 +45,7 @@ namespace coxnet {
 
     Socket* connect(const char address[], const uint16_t port,
                     DataCallback on_data, CloseCallback on_close) override {
-      IPType ip_type = ip_address_version(std::string(address));
+      IPType ip_type = ip_address_type(std::string(address));
       if (ip_type == IPType::kInvalid) {
         return nullptr;
       }
@@ -136,7 +136,7 @@ namespace coxnet {
     // Dual: address is IPv6, stack is kDual
     bool listen(const char address[], const uint16_t port, ProtocolStack stack,
                 ConnectionCallback on_connection, DataCallback on_data, CloseCallback on_close) override {
-      const IPType ip_type = ip_address_version(std::string(address));
+      const IPType ip_type = ip_address_type(std::string(address));
       if (ip_type == IPType::kInvalid) {
         return false;
       }

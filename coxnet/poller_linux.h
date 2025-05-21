@@ -29,7 +29,7 @@ namespace coxnet {
     Poller& operator=(Poller&& other) = delete;
 
     Socket* connect(const char address[], const uint16_t port, DataCallback on_data, CloseCallback on_close) override {
-      IPType ip_type = ip_address_version(std::string(address));
+      IPType ip_type = ip_address_type(std::string(address));
       if (ip_type == IPType::kInvalid) {
         return nullptr;
       }
@@ -73,8 +73,9 @@ namespace coxnet {
         return nullptr;
       }
 
+      // EINPROGRESS is mean of async operation is in progress, ignore this error code
       int result = ::connect(sock_handle, reinterpret_cast<sockaddr*>(&remote_addr_storage), addr_len);
-      if (result == SOCKET_ERROR) { // TODO: async operation is in progress, ignore this error code
+      if (result == SOCKET_ERROR) {
         if (get_last_error() != EINPROGRESS) {
           ::close(sock_handle);
           return nullptr;
@@ -115,7 +116,7 @@ namespace coxnet {
 
     bool listen(const char address[], uint16_t port, ProtocolStack stack, 
                 ConnectionCallback on_connection, DataCallback on_data, CloseCallback on_close) override {
-      IPType ip_type = ip_address_version(std::string(address));
+      IPType ip_type = ip_address_type(std::string(address));
       if (ip_type == IPType::kInvalid) {
         return false;
       }
@@ -362,7 +363,7 @@ namespace coxnet {
           // conn destructor will call ::close() if handle is valid.
           // Or call conn->_close_handle() explicitly.
           conn->_close_handle(get_last_error());
-          delete conn; // Directly delete, won't go through cleaner normally.
+          delete conn;
           continue;
         }
 

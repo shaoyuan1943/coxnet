@@ -25,7 +25,10 @@
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <string.h>
+
+#define _GNU_SOURCE // for accept4
 #include <sys/socket.h>
+
 #include <sys/types.h>
 #include <unistd.h>
 
@@ -111,7 +114,7 @@ namespace coxnet {
 
   enum class IPType { kInvalid, kIPv4, kIPv6 };
 
-  inline IPType ip_address_version(const std::string& address) {
+  inline IPType ip_address_type(const std::string& address) {
     if (address.empty()) {
       return IPType::kInvalid;
     }
