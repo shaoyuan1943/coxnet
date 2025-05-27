@@ -74,32 +74,32 @@ namespace coxnet {
     return 0;
   }
 
-  enum class ErrorOption { kNext, kContinue, kClose };
-  ErrorOption adjust_io_error_option(int err) {
+  enum class ErrorAction { kRetry, kContinue, kClose };
+  ErrorAction handle_error_action(int err) {
 #ifdef _WIN32
     switch (err) {
     case WSA_IO_PENDING:
     case WSAEWOULDBLOCK:
-      return ErrorOption::kNext;
+      return ErrorAction::kRetry;
     case WSAEINTR:
-      return ErrorOption::kContinue;
+      return ErrorAction::kContinue;
     default:
-      return ErrorOption::kClose;
+      return ErrorAction::kClose;
     }
 #endif // _WIN32
 
 #ifdef __linux__
     switch (err) {
     case EAGAIN: // EAGIN == EWOULDBLOCK
-      return ErrorOption::kNext;
+      return ErrorAction::kRetry;
     case EINTR:
-      return ErrorOption::kContinue;
+      return ErrorAction::kContinue;
     default:
-      return ErrorOption::kClose;
+      return ErrorAction::kClose;
     }
 #endif // __linux__
 
-    return ErrorOption::kClose;
+    return ErrorAction::kClose;
   }
 
   // socket read and write buffer size

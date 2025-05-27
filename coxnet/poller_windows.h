@@ -254,7 +254,7 @@ namespace coxnet {
         return;
       }
 
-      _wait_new_connection();
+      _accept_connections();
       if (sock_listener_ && sock_listener_->err_ != 0 && on_listen_err_) {
         on_listen_err_(sock_listener_->err_);
         return;
@@ -270,7 +270,7 @@ namespace coxnet {
       }
     }
   private:
-    void _wait_new_connection() {
+    void _accept_connections() {
       while (sock_listener_ != nullptr && sock_listener_->is_valid()) {
         sockaddr_storage  remote_addr_storage = {}; // For IPv4/IPv6
         int               addr_len            = sizeof(remote_addr_storage);
@@ -279,8 +279,12 @@ namespace coxnet {
         socket_t handle = ::accept(sock_listener_->native_handle(), reinterpret_cast<sockaddr*>(&remote_addr_storage), &addr_len);
         if (handle == invalid_socket) {
           int err_code = get_last_error();
-          if (err_code == WSAEWOULDBLOCK) {
+          if (handle_error_action(err_code) == ErrorAction::kRetry) {
             break;
+          }
+
+          if (handle_error_action(err_code) == ErrorAction::kContinue) {
+            continue;
           }
 
           sock_listener_->_close_handle(err_code);
@@ -344,7 +348,7 @@ namespace coxnet {
                               &conn->recv_context_for_win_.Buf, 1, &recv_bytes, &flags,
                               &conn->recv_context_for_win_.Overlapped, nullptr);
       if (result == SOCKET_ERROR) {
-        if (const int err = get_last_error(); adjust_io_error_option(err) == ErrorOption::kClose) {
+        if (const int err = get_last_error(); handle_error_action(err) == ErrorAction::kClose) {
           conn->_close_handle(err);
           return;
         }

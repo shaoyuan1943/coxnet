@@ -257,34 +257,31 @@ namespace coxnet {
 
         bool is_listener_event = (sock_listener_ && conn == sock_listener_);
         if (ev->events & (EPOLLERR | EPOLLHUP | EPOLLRDHUP)) {
-          if (is_listener_event) {
-            int       err_code  = 0;
+          int err_code = 0;
+          if (ev->events & EPOLLERR) {
             socklen_t err_len   = sizeof(err_code);
             getsockopt(conn->native_handle(), SOL_SOCKET, SO_ERROR, &err_code, &err_len);
-            err_code = err_code ? err_code : EPIPE; // EPIPE for HUP/RDHUP if no specific error
-            sock_listener_->_close_handle(err_code);
-            if (on_listen_err_) { on_listen_err_(sock_listener_->err_); }
-          } else {
-            int err_code = 0;
-            if (ev->events & EPOLLERR) {
-              socklen_t err_len = sizeof(err_code);
-              getsockopt(conn->native_handle(), SOL_SOCKET, SO_ERROR, &err_code, &err_len);
-            }
-
-            // For EPOLLHUP/EPOLLRDHUP, err_code might be 0. We treat it as a clean close by peer.
-            // If data is readable (EPOLLIN is also set), read it before closing.
-            if ((ev->events & EPOLLIN) || (ev->events & EPOLLHUP)) {
-              _try_read(conn);
-            }
-
-            conn->_close_handle(err_code ? err_code : 0); // 0 for HUP/RDHUP if no specific socket error
           }
 
+          // For EPOLLHUP/EPOLLRDHUP, err_code might be 0. We treat it as a clean close by peer.
+          // If data is readable (EPOLLIN is also set), read it before closing.
+          if ((ev->events & EPOLLIN) || (ev->events & EPOLLHUP)) {
+            _try_read(conn);
+          }
+          
+          err_code = err_code ? err_code : EIO; // give EIO for HUP/RDHUP if no specific socket error
+          if (is_listener_event) {
+            if (on_listen_err_) { on_listen_err_(err_code); }
+            sock_listener_->_close_handle(err_code);
+            break;
+          }
+            
+          conn->_close_handle(err_code); 
           continue;
         }
 
         if (is_listener_event && (ev->events & EPOLLIN)) {
-          _wait_new_connection(); 
+          _accept_connections(); 
           if (sock_listener_ && sock_listener_->err_ != 0 && on_listen_err_) {
             on_listen_err_(sock_listener_->err_);
           }
@@ -305,13 +302,13 @@ namespace coxnet {
       }
     }
   private:
-    void _wait_new_connection() {
+    void _accept_connections() {
       if (sock_listener_ == nullptr || !sock_listener_->is_valid() || epoll_fd_ == -1) {
         return;
       }
 
-      while (true) { // Edge-triggered, so accept all pending
-        sockaddr_storage  remote_addr_storage = {}; // Use storage for IPv4/IPv6
+      while (true) {
+        sockaddr_storage  remote_addr_storage = {};
         socklen_t         addr_len            = sizeof(remote_addr_storage);
         memset(&remote_addr_storage, 0, sizeof(remote_addr_storage));
 
@@ -319,13 +316,13 @@ namespace coxnet {
                                     reinterpret_cast<sockaddr*>(&remote_addr_storage), 
                                     &addr_len, SOCK_NONBLOCK | SOCK_CLOEXEC);
         if (handle == invalid_socket) {
-          int err_code = get_last_error();
-          if (err_code == EINTR || err_code == EAGAIN || err_code == EWOULDBLOCK) {
-            break; 
-          }
+          int         err_code  = get_last_error();
+          ErrorAction action    = handle_error_action(err_code);
+          if (action == ErrorAction::kRetry) { break; }
+          if (action == ErrorAction::kContinue) { continue; }
 
           sock_listener_->_close_handle(err_code);
-          if (on_listen_err_) on_listen_err_(err_code);
+          if (on_listen_err_) { on_listen_err_(err_code); }
           break;
         }
 
@@ -394,11 +391,11 @@ namespace coxnet {
         } 
         
         int err_code = get_last_error();
-        if (adjust_io_error_option(err_code) == ErrorOption::kNext) {
+        if (handle_error_action(err_code) == ErrorAction::kRetry) {
           break;
         } 
         
-        if (adjust_io_error_option(err_code) == ErrorOption::kContinue) {
+        if (handle_error_action(err_code) == ErrorAction::kContinue) {
           continue;
         }
 
