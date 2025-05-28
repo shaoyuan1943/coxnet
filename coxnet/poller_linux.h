@@ -291,7 +291,7 @@ namespace coxnet {
         }
 
         if (ev->events & EPOLLOUT) {
-          conn->_try_write_when_io_event_coming();
+          conn->_write_by_io_event();
           if (conn->is_valid()) { continue; }
         }
         
@@ -382,7 +382,7 @@ namespace coxnet {
         read_n = ::recv(conn->native_handle(), buffer_start, conn->read_buff_->writable_size(), 0);
         if (read_n > 0) {
           readed_total += read_n;
-          conn->read_buff_->add_written_from_external_take(read_n);
+          conn->read_buff_->add_written_from_external_write(read_n);
           if (on_data_ != nullptr) {
             on_data_(conn, conn->read_buff_->take_data(), conn->read_buff_->writable_size());
           }
