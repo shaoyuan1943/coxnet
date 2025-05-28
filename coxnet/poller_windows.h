@@ -19,10 +19,8 @@ namespace coxnet {
       return;
     }
 
-    if (err_code == ERROR_SUCCESS) {
-      if (transferred_bytes <= 0) {
-        err_code = 104; // 104 is ECONNRESET in linux, it's mean of connection reset by peer
-      }
+    if (err_code == ERROR_SUCCESS && transferred_bytes <= 0) {
+      err_code = WSAECONNRESET; // connection reset by peer
     }
 
     if (err_code != 0) {
@@ -30,7 +28,7 @@ namespace coxnet {
     }
 
     context->Conn->io_completed_ = true;
-    context->Conn->read_buff_->add_written_from_external_take(transferred_bytes);
+    context->Conn->read_buff_->add_written_from_external_write(transferred_bytes);
   }
 
   class Poller final : public IPoller {
@@ -278,7 +276,7 @@ namespace coxnet {
 
         socket_t handle = ::accept(sock_listener_->native_handle(), reinterpret_cast<sockaddr*>(&remote_addr_storage), &addr_len);
         if (handle == invalid_socket) {
-          int err_code = get_last_error();
+          const int err_code = get_last_error();
           if (handle_error_action(err_code) == ErrorAction::kRetry) {
             break;
           }
@@ -331,7 +329,7 @@ namespace coxnet {
     }
 
     void _try_read(Socket* conn) {
-      if (!conn || !conn->is_valid() || !conn->read_buff_ || !conn->io_completed_) return;
+      if (!conn || !conn->is_valid() || !conn->read_buff_ || !conn->io_completed_) { return; }
 
       if (conn->read_buff_->written_size() > 0 && on_data_ != nullptr) {
         on_data_(conn, conn->read_buff_->take_data(), conn->read_buff_->written_size());
@@ -355,7 +353,7 @@ namespace coxnet {
       }
     }
 
-    void _try_write_async(Socket* conn) { conn->_try_write_when_io_event_coming(); }
+    void _try_write_async(Socket* conn) { conn->_write_by_io_event(); }
   };
 } // namespace coxnet
 

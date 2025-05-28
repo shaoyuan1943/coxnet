@@ -54,7 +54,7 @@ namespace coxnet {
     
     char* take_data()                   { return &data_[begin_]; }
     char* take_data_from_seek()         { return &data_[seek_index_]; }
-    void add_written_from_external_take(const size_t size_written) {
+    void add_written_from_external_write(const size_t size_written) {
       assert(end_ + size_written <= size_);
       end_ += size_written;
     }
@@ -67,7 +67,7 @@ namespace coxnet {
       }
 
       // Make sure seek_index_ doesn't go before begin_ if that's a constraint
-      if (seek_index_ < begin_) seek_index_ = begin_;
+      if (seek_index_ < begin_) { seek_index_ = begin_; }
     }
 
     void write(const char* data, size_t size_written) {

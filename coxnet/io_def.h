@@ -84,7 +84,7 @@ namespace coxnet {
     case WSAEINTR:
       return ErrorAction::kContinue;
     default:
-      return ErrorAction::kClose;
+      break;
     }
 #endif // _WIN32
 
@@ -95,7 +95,7 @@ namespace coxnet {
     case EINTR:
       return ErrorAction::kContinue;
     default:
-      return ErrorAction::kClose;
+      break;
     }
 #endif // __linux__
 
@@ -103,17 +103,16 @@ namespace coxnet {
   }
 
   // socket read and write buffer size
-  static constexpr size_t max_read_buff_size    = (size_t)(1024 * 4);
-  static constexpr size_t max_write_buff_size   = (size_t)(1024 * 4);
+  static constexpr size_t max_read_buff_size    = 1024 * 4;
+  static constexpr size_t max_write_buff_size   = 1024 * 4;
 
   // every io operation size
-  static constexpr size_t max_size_per_write    = (size_t)(1024 * 2);
-  static constexpr size_t max_size_per_read     = (size_t)(1024 * 2);
+  static constexpr size_t max_size_per_write    = 1024 * 2;
+  static constexpr size_t max_size_per_read     = 1024 * 2;
 
   static constexpr size_t max_epoll_event_count = 64;
 
   enum class IPType { kInvalid, kIPv4, kIPv6 };
-
   inline IPType ip_address_type(const std::string& address) {
     if (address.empty()) {
       return IPType::kInvalid;

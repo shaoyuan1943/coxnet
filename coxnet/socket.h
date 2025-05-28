@@ -28,9 +28,7 @@ namespace coxnet {
     }
 
     void clear() {
-      if (!clean_handles_.empty()) {
-        clean_handles_.clear();
-      }
+      if (!clean_handles_.empty()) { clean_handles_.clear(); }
     }
   private:
     std::set<socket_t>            clean_handles_;
@@ -54,8 +52,8 @@ public:
     friend class Poller;
     friend class IPoller;
     explicit Socket(socket_t native_handle, Cleaner* cleaner = nullptr, int epoll_fd = -1) {
-      handle_ = native_handle;
-      cleaner_ = cleaner;
+      handle_   = native_handle;
+      cleaner_  = cleaner;
 
 #ifdef __linux__
       epoll_fd_ = epoll_fd;
@@ -132,7 +130,7 @@ public:
     }
 
 private:
-    size_t _try_write_when_io_event_coming() {
+    size_t _write_by_io_event() {
       if (write_buff_->written_size_from_seek() <= 0) {
         return 0;
       }
