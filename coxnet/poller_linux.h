@@ -97,8 +97,10 @@ namespace coxnet {
       }
 
       auto conn = new Socket(sock_handle, _cleaner(), epoll_fd_);
-      epoll_event ev{ .events = EPOLLIN | EPOLLET | EPOLLHUP, .data.ptr = conn };
-      int result = epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, sock_handle, &ev);
+      epoll_event ev  = {};
+      ev.events       = EPOLLIN | EPOLLET | EPOLLHUP;
+      ev.data.ptr     = conn;
+      result = epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, sock_handle, &ev);
       if (result != 0) {
         ::close(sock_handle);
         delete conn;
@@ -199,7 +201,9 @@ namespace coxnet {
       }
 
       sock_listener_ = new listener(sock_handle); 
-      epoll_event ev{ .events = EPOLLIN | EPOLLET, .data.ptr = sock_listener_ };
+      epoll_event ev = {};
+      ev.events      = EPOLLIN | EPOLLET; 
+      ev.data.ptr    = sock_listener_ ;
       if (epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, sock_handle, &ev) != 0) {
         ::close(sock_handle);
         delete sock_listener_;
@@ -271,8 +275,8 @@ namespace coxnet {
           
           err_code = err_code ? err_code : EIO; // give EIO for HUP/RDHUP if no specific socket error
           if (is_listener_event) {
-            if (on_listen_err_) { on_listen_err_(err_code); }
             sock_listener_->_close_handle(err_code);
+            if (on_listen_err_) { on_listen_err_(err_code); }
             break;
           }
             
@@ -286,8 +290,7 @@ namespace coxnet {
             on_listen_err_(sock_listener_->err_);
           }
 
-          if(sock_listener_->is_valid()) { continue; }
-          continue;
+          if (sock_listener_->is_valid()) { continue; }
         }
 
         if (ev->events & EPOLLOUT) {
@@ -322,7 +325,6 @@ namespace coxnet {
           if (action == ErrorAction::kContinue) { continue; }
 
           sock_listener_->_close_handle(err_code);
-          if (on_listen_err_) { on_listen_err_(err_code); }
           break;
         }
 
@@ -334,16 +336,18 @@ namespace coxnet {
         uint16_t  client_port                     = 0;
 
         switch (remote_addr_storage.ss_family) {
-        case AF_INET:
+        case AF_INET: {
           sockaddr_in* sin = reinterpret_cast<sockaddr_in*>(&remote_addr_storage);
           inet_ntop(AF_INET, &sin->sin_addr, client_ip_str, sizeof(client_ip_str));
           client_port = ntohs(sin->sin_port);
           break;
-        case AF_INET6:
+        }
+        case AF_INET6: {
           sockaddr_in6* sin6 = reinterpret_cast<sockaddr_in6*>(&remote_addr_storage);
           inet_ntop(AF_INET6, &sin6->sin6_addr, client_ip_str, sizeof(client_ip_str));
           client_port = ntohs(sin6->sin6_port);
           break;
+        }
         default:
           break;
         }
@@ -352,7 +356,9 @@ namespace coxnet {
         conn->_set_remote_addr(client_ip_str, client_port);
 
         // Add to epoll. EPOLLRDHUP for peer close.
-        epoll_event ev{ .events = EPOLLIN | EPOLLET | EPOLLRDHUP, .data.ptr = conn };
+        epoll_event ev  = {};
+        ev.events       = EPOLLIN | EPOLLET | EPOLLRDHUP;
+        ev.data.ptr     = conn;
         if (epoll_ctl(epoll_fd_, EPOLL_CTL_ADD, handle, &ev) != 0) {
           // Failed to add to epoll, close and delete this connection
           // conn destructor will call ::close() if handle is valid.
@@ -363,10 +369,7 @@ namespace coxnet {
         }
 
         conns_.emplace(conn->native_handle(), conn);
-
-        if (on_connection_ != nullptr) {
-          on_connection_(conn);
-        }
+        if (on_connection_ != nullptr) { on_connection_(conn); }
       }
     }
 
@@ -376,7 +379,9 @@ namespace coxnet {
       size_t  readed_total  = 0;
 
       while (true) {
-        if (conn->read_buff_->writable_size() <= 0) { conn->read_buff_->ensure_writable_size(max_size_per_read); }
+        if (conn->read_buff_->writable_size() <= 0) { 
+          conn->read_buff_->ensure_writable_size(max_size_per_read); 
+        }
         
         auto buffer_start = conn->read_buff_->take_data();
         read_n = ::recv(conn->native_handle(), buffer_start, conn->read_buff_->writable_size(), 0);
@@ -384,20 +389,15 @@ namespace coxnet {
           readed_total += read_n;
           conn->read_buff_->add_written_from_external_write(read_n);
           if (on_data_ != nullptr) {
-            on_data_(conn, conn->read_buff_->take_data(), conn->read_buff_->writable_size());
+            on_data_(conn, conn->read_buff_->take_data(), conn->read_buff_->written_size());
           }
           conn->read_buff_->clear();
           continue;
         } 
         
         int err_code = get_last_error();
-        if (handle_error_action(err_code) == ErrorAction::kRetry) {
-          break;
-        } 
-        
-        if (handle_error_action(err_code) == ErrorAction::kContinue) {
-          continue;
-        }
+        if (handle_error_action(err_code) == ErrorAction::kRetry) { break; } 
+        if (handle_error_action(err_code) == ErrorAction::kContinue) { continue; }
 
         conn->_close_handle(err_code);
         break;

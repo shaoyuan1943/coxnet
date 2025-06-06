@@ -69,6 +69,8 @@
         "thread": "cpp",
         "typeinfo": "cpp",
         "variant": "cpp",
-        "cerrno": "cpp"
+        "cerrno": "cpp",
+        "ranges": "cpp",
+        "set": "cpp"
     }
 }

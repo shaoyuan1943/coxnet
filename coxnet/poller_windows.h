@@ -277,13 +277,8 @@ namespace coxnet {
         socket_t handle = ::accept(sock_listener_->native_handle(), reinterpret_cast<sockaddr*>(&remote_addr_storage), &addr_len);
         if (handle == invalid_socket) {
           const int err_code = get_last_error();
-          if (handle_error_action(err_code) == ErrorAction::kRetry) {
-            break;
-          }
-
-          if (handle_error_action(err_code) == ErrorAction::kContinue) {
-            continue;
-          }
+          if (handle_error_action(err_code) == ErrorAction::kRetry) { break; }
+          if (handle_error_action(err_code) == ErrorAction::kContinue) { continue; }
 
           sock_listener_->_close_handle(err_code);
           break;
@@ -302,16 +297,18 @@ namespace coxnet {
         char      client_ip_str[INET6_ADDRSTRLEN] = { 0 };
         uint16_t  client_port                     = 0;
         switch (remote_addr_storage.ss_family) {
-        case AF_INET:
+        case AF_INET: {
           sockaddr_in* sin = reinterpret_cast<sockaddr_in*>(&remote_addr_storage);
           InetNtopA(AF_INET, &sin->sin_addr, client_ip_str, sizeof(client_ip_str));
           client_port = ntohs(sin->sin_port);
           break;
-        case AF_INET6:
+        }
+        case AF_INET6: {
           sockaddr_in6* sin6 = reinterpret_cast<sockaddr_in6*>(&remote_addr_storage);
           InetNtopA(AF_INET6, &sin6->sin6_addr, client_ip_str, sizeof(client_ip_str));
           client_port = ntohs(sin6->sin6_port);
           break;
+        }
         default:
           assert(false, "Unsupport net family");
           break;

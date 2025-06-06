@@ -112,7 +112,9 @@ public:
         if (handle_error_action(err_code) == ErrorAction::kRetry) {
           write_buff_->write(data + total_sent, data_size - total_sent);
 #ifdef __linux__
-          epoll_event ev{ .events = EPOLLIN | EPOLLOUT | EPOLLET, .data.ptr = this };
+          epoll_event ev  = {};
+          ev.events       = EPOLLIN | EPOLLOUT | EPOLLET; 
+          ev.data.ptr     = this ;
           epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, handle_, &ev);
 #endif // __linux__
           break;
@@ -149,7 +151,9 @@ private:
         const int err_code = get_last_error();
         if (handle_error_action(err_code) == ErrorAction::kRetry) {
 #ifdef __linux__
-          epoll_event ev{ .events = EPOLLIN | EPOLLOUT | EPOLLET, .data.ptr = this };
+          epoll_event ev  = {};
+          ev.events       = EPOLLIN | EPOLLOUT | EPOLLET; 
+          ev.data.ptr     = this ;
           epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, handle_, &ev);
 #endif // __linux__
           break;
@@ -166,7 +170,9 @@ private:
       if (total_sent >= data_size) {
         write_buff_->clear();
 #ifdef __linux__
-        epoll_event ev{ .events = EPOLLIN | EPOLLET, .data.ptr = this };
+        epoll_event ev  = {};
+        ev.events       = EPOLLIN | EPOLLET; 
+        ev.data.ptr     = this ;
         epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, handle_, &ev);
 #endif // __linux__
       }

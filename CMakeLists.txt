@@ -6,5 +6,5 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 include_directories(${CMAEKE_SOURCE_DIR}/coxnet)
 
-add_subdirectory(samples/my_client)
-add_subdirectory(samples/my_server)
+add_subdirectory(samples/client)
+add_subdirectory(samples/server)
