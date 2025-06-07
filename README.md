@@ -17,3 +17,7 @@ coxnet是轻量级、跨平台的Non-Block C++网络库。它旨在提供简洁�
 
 ### 🛠️ 编译
 coxnet实现为header-only方式，将coxnet代码目录包括到你的工程下，然后`#include "coxnet.h"`即可编译使用。
+
+### 🚀 实现计划
+1. `class Poller` for macOS
+2. 提供接口形式的SimpleBuffer，去除coxnet层级的IO拷贝，进一步提升性能。
