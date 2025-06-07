@@ -36,9 +36,7 @@ namespace coxnet {
   };
 
 #ifdef _WIN32
-  class RecvContext4Win {
-    friend class Socket;
-    friend class Poller;
+  struct RecvContext4Win {
     friend void WINAPI IOCompletionCallBack(DWORD, DWORD, LPOVERLAPPED);
 
     WSAOVERLAPPED   Overlapped  = {};
@@ -140,8 +138,8 @@ private:
       size_t total_sent   = 0;
       size_t data_size    = write_buff_->written_size_from_seek();
       while (total_sent < data_size) {
-        int sent_n =
-            ::send(native_handle(), write_buff_->take_data_from_seek(), write_buff_->written_size_from_seek(), 0);
+        int sent_n = ::send(native_handle(), write_buff_->take_data_from_seek(), 
+                            write_buff_->written_size_from_seek(), 0);
         if (sent_n > 0) {
           total_sent += sent_n;
           write_buff_->seek(sent_n);
@@ -238,10 +236,6 @@ private:
 #endif //_WIN32
   private:
     socket_t          handle_           = invalid_socket;
-
-    char              remote_addr_str_[INET6_ADDRSTRLEN]  = { 0 };
-    uint32_t          remote_port_      = 0;
-
     SimpleBuffer*     read_buff_        = nullptr;
     SimpleBuffer*     write_buff_       = nullptr;
     bool              io_completed_     = false;
@@ -250,12 +244,14 @@ private:
     bool              user_closed_      = false;
     Cleaner*          cleaner_          = nullptr;
 
+    char              remote_addr_str_[INET6_ADDRSTRLEN]  = { 0 };
+    uint32_t          remote_port_                        = 0;
 #ifdef __linux__
     int               epoll_fd_           = -1;    
 #endif
 
 #ifdef _WIN32
-    RecvContext4Win recv_context_for_win_;
+    RecvContext4Win   recv_context_for_win_;
 #endif
   };
 

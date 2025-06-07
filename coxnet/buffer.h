@@ -35,7 +35,7 @@ namespace coxnet {
         seek_index_ = other.seek_index_;
         size_       = other.size_;
 
-        other.data_       = nullptr; // 重要
+        other.data_       = nullptr;
         other.size_       = 0;
         other.begin_      = 0;
         other.end_        = 0;
