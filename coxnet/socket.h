@@ -169,7 +169,7 @@ private:
         write_buff_->clear();
 #ifdef __linux__
         epoll_event ev  = {};
-        ev.events       = EPOLLIN | EPOLLET; 
+        ev.events       = EPOLLIN | EPOLLET; // remove EPOLLOUT
         ev.data.ptr     = this ;
         epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, handle_, &ev);
 #endif // __linux__
