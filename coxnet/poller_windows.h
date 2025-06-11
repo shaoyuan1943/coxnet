@@ -235,7 +235,13 @@ namespace coxnet {
       return true;
     }
 
-    void poll() override { _poll_once(); _cleanup(); }
+    void poll() override {
+      if (shutdown_requested_.load()) { return; }
+
+      _poll_once();
+      _cleanup();
+    }
+
     void shut() override {
       if (sock_listener_ != nullptr && sock_listener_->native_handle() != invalid_socket) {
         sock_listener_->_close_handle(0);
@@ -248,13 +254,13 @@ namespace coxnet {
     }
   protected:
     void _poll_once() {
-      if (sock_listener_ == nullptr || !sock_listener_->is_valid()) {
-        return;
-      }
+      if (sock_listener_ == nullptr || !sock_listener_->is_valid()) { return; }
 
       _accept_connections();
-      if (sock_listener_ && sock_listener_->err_ != 0 && on_listen_err_) {
+      if (sock_listener_->err_ != 0 && on_listen_err_) {
         on_listen_err_(sock_listener_->err_);
+
+        request_shutdown();
         return;
       }
 

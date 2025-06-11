@@ -14,5 +14,6 @@ namespace coxnet {
   };
 }
 
-#endif //
+#endif // __APPLE__
+
 #endif // POLLER_MAC_H

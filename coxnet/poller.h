@@ -9,6 +9,7 @@
 #include <chrono>
 #include <ranges>
 #include <unordered_map>
+#include <atomic>
 
 namespace coxnet {
   class IPoller {
@@ -33,12 +34,16 @@ namespace coxnet {
       delete cleaner_;
       cleaner_ = nullptr;  
     };
+
     virtual void shut() = 0;
     virtual void poll() = 0;
     virtual Socket* connect(const char address[], const uint16_t port,
-      DataCallback on_data, CloseCallback on_close) = 0;
+                            DataCallback on_data, CloseCallback on_close) = 0;
     virtual bool listen(const char address[], const uint16_t port, ProtocolStack stack, 
-      ConnectionCallback on_connection, DataCallback on_data, CloseCallback on_close) = 0;
+                        ConnectionCallback on_connection, DataCallback on_data, CloseCallback on_close) = 0;
+    
+    void request_shutdown() { shutdown_requested_.store(true); }
+    bool is_shutdown_requested() const { return shutdown_requested_.load(); }
   protected:
     void _close_conns_internal() {
       for(const auto& [handle, conn] : conns_) {
@@ -58,16 +63,21 @@ namespace coxnet {
       on_data_        = nullptr;
       on_close_       = nullptr;
     }
+
     void _cleanup() const { cleaner_->traverse(); }
     Cleaner* _cleaner() const { return cleaner_; }
   protected:
-    ConnectionCallback  on_connection_  = nullptr;
-    DataCallback        on_data_        = nullptr;
-    CloseCallback       on_close_       = nullptr;
-    ListenErrorCallback on_listen_err_  = nullptr;
-    Cleaner*                                cleaner_      = nullptr;
-    std::unordered_map<socket_t, Socket*>   conns_;
-    listener*                               sock_listener_ = nullptr;
+    using Conns = std::unordered_map<socket_t, Socket*>;
+
+    ConnectionCallback  on_connection_      = nullptr;
+    DataCallback        on_data_            = nullptr;
+    CloseCallback       on_close_           = nullptr;
+    ListenErrorCallback on_listen_err_      = nullptr;
+
+    Cleaner*            cleaner_            = nullptr;
+    Conns               conns_;
+    listener*           sock_listener_      = nullptr;
+    std::atomic<bool>   shutdown_requested_ = { false };
   };
 } // namespace coxnet
 

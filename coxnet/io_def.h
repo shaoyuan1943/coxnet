@@ -67,6 +67,10 @@ namespace coxnet {
     return errno;
 #endif // __linux__
 
+#ifdef __APPLE__
+    return errno;
+#endif // __APPLE__
+
 #ifdef _WIN32
     return (int)::WSAGetLastError();
 #endif // _WIN32
@@ -92,9 +96,11 @@ namespace coxnet {
     switch (err) {
     case EAGAIN: // EAGIN == EWOULDBLOCK
       return ErrorAction::kRetry;
+    case EPROTO:
+    case ECONNABORTED:
     case EINTR:
       return ErrorAction::kContinue;
-    default:
+    default:  // EMFILE, ENFILE, EBADF, EINVAL, EFAULT  
       break;
     }
 #endif // __linux__

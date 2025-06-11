@@ -118,12 +118,12 @@ namespace coxnet {
 
     bool listen(const char address[], uint16_t port, ProtocolStack stack, 
                 ConnectionCallback on_connection, DataCallback on_data, CloseCallback on_close) override {
-      IPType ip_type = ip_address_type(std::string(address));
-      if (ip_type == IPType::kInvalid) {
+      if (sock_listener_ != nullptr) {
         return false;
       }
 
-      if (sock_listener_ != nullptr) { // Already listening
+      IPType ip_type = ip_address_type(std::string(address));
+      if (ip_type == IPType::kInvalid) {
         return false;
       }
 
@@ -219,6 +219,7 @@ namespace coxnet {
     
     void poll() override {
       if (epoll_fd_ == -1) { return; }
+      if (shutdown_requested_.load()) { return; }
 
       _poll_once(); 
       _cleanup(); 
@@ -244,9 +245,7 @@ namespace coxnet {
     }
   protected:
     void _poll_once() {
-      if (epoll_fd_ == -1 || epoll_events_ == nullptr) {
-        return;
-      }
+      if (epoll_fd_ == -1 || epoll_events_ == nullptr) { return; }
 
       int count = epoll_wait(epoll_fd_, epoll_events_, max_epoll_event_count, 0);
       for (int i = 0; i < count; i++) {
@@ -259,7 +258,7 @@ namespace coxnet {
           continue;
         }
 
-        bool is_listener_event = (sock_listener_ && conn == sock_listener_);
+        bool is_listener_event = (sock_listener_ != nullptr && conn == sock_listener_);
         if (ev->events & (EPOLLERR | EPOLLHUP | EPOLLRDHUP)) {
           int err_code = 0;
           if (ev->events & EPOLLERR) {
@@ -277,6 +276,8 @@ namespace coxnet {
           if (is_listener_event) {
             sock_listener_->_close_handle(err_code);
             if (on_listen_err_) { on_listen_err_(err_code); }
+            
+            request_shutdown();
             break;
           }
             
@@ -286,11 +287,14 @@ namespace coxnet {
 
         if (is_listener_event && (ev->events & EPOLLIN)) {
           _accept_connections(); 
-          if (sock_listener_ && sock_listener_->err_ != 0 && on_listen_err_) {
+          if (sock_listener_ && sock_listener_->err_ != 0 && on_listen_err_ != nullptr) {
             on_listen_err_(sock_listener_->err_);
+
+            request_shutdown();
+            break;
           }
 
-          if (sock_listener_->is_valid()) { continue; }
+          continue;
         }
 
         if (ev->events & EPOLLOUT) {
@@ -306,9 +310,7 @@ namespace coxnet {
     }
   private:
     void _accept_connections() {
-      if (sock_listener_ == nullptr || !sock_listener_->is_valid() || epoll_fd_ == -1) {
-        return;
-      }
+      if (sock_listener_ == nullptr || !sock_listener_->is_valid() || epoll_fd_ == -1) { return; }
 
       while (true) {
         sockaddr_storage  remote_addr_storage = {};
